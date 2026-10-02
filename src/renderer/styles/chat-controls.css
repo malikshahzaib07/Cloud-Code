@@ -1,0 +1,186 @@
+/* ==========================================================================
+   Cloud Code — Chat control bar styles (mode toggle row, model/thinking
+   selects, attach button and attachment chips). Survives a ~300px panel.
+   ========================================================================== */
+
+.chat-control-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 6px 2px;
+  background: var(--bg-sidebar, #252526);
+  border-top: 1px solid var(--border-subtle, #2b2b2b);
+}
+
+/* Slight density tweak only — .mode-toggle / .mode-btn live in agentic.css. */
+.chat-control-bar .mode-btn {
+  font-size: 10.5px;
+  padding: 3px 8px;
+}
+
+.chat-ctl-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ------------------------------- selects -------------------------------- */
+
+.chat-ctl-select {
+  height: 22px;
+  max-height: 22px;
+  min-width: 0;
+  max-width: 130px;
+  flex: 0 1 auto;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 20px;
+  font-family: inherit;
+  color: var(--text-primary, #cccccc);
+  background-color: var(--bg-input, #3c3c3c);
+  border: 1px solid var(--border-color, #3e3e42);
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: text;
+  text-overflow: ellipsis;
+  outline: none;
+}
+
+.chat-ctl-select:hover {
+  background-color: var(--bg-activity, #333333);
+  border-color: var(--accent-color, #007acc);
+}
+
+.chat-ctl-select:focus,
+.chat-ctl-select:focus-visible {
+  border-color: var(--accent-color, #007acc);
+  outline: 1px solid var(--accent-color, #007acc);
+  outline-offset: -1px;
+}
+
+.chat-ctl-select option {
+  background-color: var(--bg-input, #3c3c3c);
+  color: var(--text-primary, #cccccc);
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+.chat-ctl-select option:checked {
+  background-color: var(--accent-color, #007acc);
+  color: #ffffff;
+}
+
+/* ------------------------------ buttons --------------------------------- */
+
+.chat-ctl-btn {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  min-width: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-secondary, #969696);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.chat-ctl-btn:hover {
+  color: var(--text-primary, #cccccc);
+  background: var(--bg-activity, #333333);
+  border-color: var(--border-color, #3e3e42);
+}
+
+.chat-ctl-btn:active {
+  background: var(--bg-input, #3c3c3c);
+  color: var(--text-active, #ffffff);
+}
+
+.chat-ctl-btn svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  pointer-events: none;
+}
+
+/* --------------------------- attachment chips ---------------------------- */
+
+.attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: center;
+  gap: 4px;
+  max-height: 64px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 3px 6px;
+  background: var(--bg-sidebar, #252526);
+  border-top: 1px solid var(--border-subtle, #2b2b2b);
+}
+
+.attach-chips.hidden {
+  display: none;
+}
+
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  height: 20px;
+  padding: 0 2px 0 7px;
+  font-size: 11px;
+  line-height: 20px;
+  color: var(--text-primary, #cccccc);
+  background: var(--bg-input, #3c3c3c);
+  border: 1px solid var(--border-color, #3e3e42);
+  border-radius: 10px;
+}
+
+.attach-chip:hover {
+  border-color: var(--accent-color, #007acc);
+}
+
+.attach-chip-name {
+  min-width: 0;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.attach-chip-size {
+  flex: 0 0 auto;
+  color: var(--text-secondary, #969696);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.attach-chip-remove {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-secondary, #969696);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.attach-chip-remove:hover {
+  color: var(--text-active, #ffffff);
+  background: var(--accent-color, #007acc);
+}

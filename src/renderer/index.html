@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="styles/autocomplete.css">
   <link rel="stylesheet" href="styles/search.css">
   <link rel="stylesheet" href="styles/settings.css">
+  <link rel="stylesheet" href="styles/chat-controls.css">
 </head>
 <body>
   <div id="app">
@@ -29,7 +30,7 @@
         <button class="icon-btn" id="open-folder-top-btn" title="Open Folder (Ctrl+O)">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 14.5 4H7.414l-1.707-1.707A1 1 0 0 0 5 2H1.5z"/></svg>
         </button>
-        <button class="icon-btn" id="toggle-terminal-btn" title="Toggle Terminal (Ctrl+\`)">
+        <button class="icon-btn" id="toggle-terminal-btn" title="Toggle Terminal (Ctrl+`)">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3zm2-1a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H2z"/><path d="M3.146 5.146a.5.5 0 0 1 .708 0L6.707 8l-2.853 2.854a.5.5 0 1 1-.708-.708L5.293 8 3.146 5.854a.5.5 0 0 1 0-.708zM7.5 10.5a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 0 1H8a.5.5 0 0 1-.5-.5z"/></svg>
         </button>
         <button class="icon-btn" id="command-palette-btn" title="Command Palette (Ctrl+Shift+P)">
@@ -48,7 +49,7 @@
         <div class="activity-icon" data-view="search" title="Search (Ctrl+Shift+F)">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
         </div>
-        <div class="activity-icon" data-view="ai-chat" title="Cloud Code AI Assistant">
+        <div class="activity-icon active" data-panel-toggle="ai" title="Toggle Agent Panel (Ctrl+Shift+A)">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="13" r="1.5"/><circle cx="15" cy="13" r="1.5"/></svg>
         </div>
         <div class="activity-spacer"></div>
@@ -57,7 +58,7 @@
         </div>
       </div>
 
-      <!-- Sidebar -->
+      <!-- Sidebar (Explorer / Search) -->
       <div id="sidebar">
         <!-- Explorer View -->
         <div id="explorer-view" class="sidebar-view active">
@@ -82,9 +83,12 @@
 
         <!-- Workspace Search View (markup injected by search.js) -->
         <div id="search-view" class="sidebar-view"></div>
+      </div><!-- /#sidebar -->
 
+      <!-- Agent Panel (left side, toggleable with Ctrl+Shift+A) -->
+      <div id="agent-panel">
         <!-- AI Chat View -->
-        <div id="ai-chat-view" class="sidebar-view">
+        <div id="ai-chat-view">
           <div class="sidebar-header">
             <span>CLOUD CODE AI</span>
             <div class="actions">
@@ -95,18 +99,10 @@
           </div>
 
           <div class="ai-header-controls">
-            <div class="mode-toggle" id="chat-mode-toggle" title="Chat: ask questions • Agent: let AI edit files & run commands">
-              <button id="mode-chat-btn" class="mode-btn active">Chat</button>
-              <button id="mode-agent-btn" class="mode-btn">Agent</button>
-            </div>
             <div class="badge" title="Private connection active">
               <span class="badge-dot"></span>
               <span>Local GPU Tunnel</span>
             </div>
-            <select id="model-select" class="model-select">
-              <option value="qwen-2.5-coder-7b">qwen-2.5-coder-7b</option>
-              <option value="deepseek-r1-8b">deepseek-r1-8b</option>
-            </select>
           </div>
 
           <div id="chat-messages">
@@ -120,6 +116,27 @@
               <button class="quick-prompt-btn" data-prompt="Refactor this code cleanly">Refactor</button>
               <button class="quick-prompt-btn" data-prompt="Generate comprehensive unit tests for this code">Unit Tests</button>
             </div>
+
+            <!-- Chat control bar: agent switch · think level · model · attach -->
+            <div class="chat-control-bar" id="chat-control-bar">
+              <div class="mode-toggle" id="chat-mode-toggle" title="Chat: ask questions • Agent: let AI edit files & run commands">
+                <button id="mode-chat-btn" class="mode-btn active" type="button">Chat</button>
+                <button id="mode-agent-btn" class="mode-btn" type="button">Agent</button>
+              </div>
+              <span class="chat-ctl-spacer"></span>
+              <select id="think-level-select" class="chat-ctl-select" title="Thinking level">
+                <option value="off">Think: Off</option>
+                <option value="low">Think: Low</option>
+                <option value="medium" selected>Think: Medium</option>
+                <option value="high">Think: High</option>
+              </select>
+              <select id="model-select" class="chat-ctl-select" title="Model">
+                <option value="qwen-2.5-coder-7b">qwen-2.5-coder-7b</option>
+              </select>
+              <button id="attach-files-btn" class="chat-ctl-btn" type="button" title="Attach files to context"></button>
+            </div>
+            <div id="attach-chips" class="attach-chips hidden"></div>
+
             <div class="input-box-wrapper">
               <textarea id="chat-input" placeholder="Ask AI about your project... (Shift+Enter for newline)"></textarea>
               <button id="send-msg-btn" title="Send (Enter)">
@@ -129,7 +146,7 @@
             <div id="mention-popup" class="mention-popup hidden"></div>
           </div>
         </div>
-      </div>
+      </div><!-- /#agent-panel -->
 
       <!-- Editor Container -->
       <div id="editor-container">
@@ -143,11 +160,16 @@
               <path d="M14.5 3.5l-3-2a.5.5 0 0 0-.5 0L1.5 7.5a.5.5 0 0 0 0 .9l9.5 6a.5.5 0 0 0 .5 0l3-2a.5.5 0 0 0 .2-.4v-8.5a.5.5 0 0 0-.2-.5zM11 11.2L4.3 8 11 4.8v6.4z"/>
             </svg>
             <div style="font-size: 16px; font-weight: 500; color: #888;">Cloud Code AI</div>
+            <div class="empty-subtitle">No folder open — choose a folder to start working</div>
+            <button class="empty-open-btn" id="empty-open-folder-btn" type="button">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 14.5 4H7.414l-1.707-1.707A1 1 0 0 0 5 2H1.5z"/></svg>
+              <span>Open Folder</span>
+              <kbd>Ctrl+O</kbd>
+            </button>
             <div class="shortcuts">
-              <div><kbd>Ctrl + P</kbd> Quick Open File</div>
               <div><kbd>Ctrl + Shift + P</kbd> Command Palette</div>
+              <div><kbd>Ctrl + P</kbd> Quick Open File</div>
               <div><kbd>Ctrl + K</kbd> Inline AI Edit</div>
-              <div><kbd>Ctrl + O</kbd> Open Folder</div>
               <div><kbd>Ctrl + S</kbd> Save File</div>
               <div><kbd>Ctrl + `</kbd> Toggle Terminal</div>
             </div>
@@ -210,6 +232,7 @@
   <script src="js/inline-edit.js"></script>
   <script src="js/search.js"></script>
   <script src="js/settings.js"></script>
+  <script src="js/chat-controls.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

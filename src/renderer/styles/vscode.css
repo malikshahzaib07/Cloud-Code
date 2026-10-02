@@ -180,6 +180,103 @@ body, html {
   display: flex;
 }
 
+/* ============================================================================
+   Agent Panel — AI/Agent chat, docked on the LEFT between the sidebar and the
+   editor. Toggle with the robot activity icon or Ctrl+Shift+A.
+   ========================================================================== */
+#agent-panel {
+  width: 380px;
+  min-width: 260px;
+  max-width: 720px;
+  background-color: var(--bg-sidebar);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  /* Drag the panel's right edge to resize (needs a non-visible overflow). */
+  overflow: hidden;
+  resize: horizontal;
+}
+
+#agent-panel.hidden {
+  display: none;
+}
+
+#ai-chat-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ============================================================================
+   Scroll fixes
+   A flex item defaults to `min-height: auto`, so a growing child stops the
+   parent from ever scrolling (`overflow: auto` silently does nothing).
+   Every scrollable flex child therefore needs `min-height: 0`, and every
+   fixed-size sibling needs `flex-shrink: 0`.
+   ========================================================================== */
+#sidebar,
+.sidebar-view,
+#agent-panel,
+#ai-chat-view,
+#editor-container,
+#monaco-host,
+#bottom-panel,
+#terminal-view {
+  min-height: 0;
+}
+
+.sidebar-header,
+.ai-header-controls,
+.chat-footer,
+#tabs-bar,
+#bottom-panel,
+.panel-tabs,
+.quick-prompts,
+.chat-control-bar,
+.agent-run-bar {
+  flex-shrink: 0;
+}
+
+.tree-container,
+#chat-messages {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+/* ============================================================================
+   Empty state (no folder open)
+   ========================================================================== */
+.empty-subtitle {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #6e6e6e;
+}
+
+.empty-open-btn {
+  margin-top: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  font-size: 12px;
+  color: #ffffff;
+  background-color: #007acc;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.empty-open-btn:hover {
+  background-color: #1a9bf0;
+}
+
+.empty-open-btn kbd {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
 .sidebar-header {
   height: 35px;
   padding: 0 16px;
@@ -379,8 +476,16 @@ body, html {
 #empty-state .shortcuts {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 6px;
   font-size: 12px;
+}
+
+#empty-state .shortcuts > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
 }
 
 #empty-state kbd {
@@ -389,6 +494,9 @@ body, html {
   padding: 2px 6px;
   border-radius: 3px;
   color: #aaa;
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: text;
 }
 
 /* Bottom Panel / Terminal */

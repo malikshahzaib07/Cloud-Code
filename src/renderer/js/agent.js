@@ -310,6 +310,14 @@ class AgentController {
   // ==========================================================================
   buildSystemPrompt(root) {
     const today = new Date().toISOString().slice(0, 10);
+    const thinkLevel = window.AppSettings ? window.AppSettings.get('thinkLevel') : 'medium';
+    let thinkLine;
+    switch (thinkLevel) {
+      case 'off': thinkLine = 'Reasoning effort: OFF — go straight to the answer, minimal exploration.'; break;
+      case 'low': thinkLine = 'Reasoning effort: LOW — act directly and efficiently, avoid unnecessary exploration.'; break;
+      case 'high': thinkLine = 'Reasoning effort: HIGH — plan carefully, verify your work with tools before answering, and consider edge cases.'; break;
+      default: thinkLine = 'Reasoning effort: MEDIUM — brief deliberation, then act.';
+    }
     return `You are Cloud Code Agent, an expert autonomous software engineer working inside the user's IDE on their machine.
 
 Workspace root: ${root}
@@ -331,6 +339,8 @@ If native function calling is unavailable in your responses, use this exact text
 <<<TOOL>>>
 {"name":"tool_name","args":{...}}
 <<<END>>>
+
+${thinkLine}
 
 Respond in the user's language.`;
   }

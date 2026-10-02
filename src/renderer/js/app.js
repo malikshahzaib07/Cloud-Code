@@ -31,6 +31,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Activity Bar Navigation
   // ---------------------------------------------------------------------------
   function switchView(name) {
+    // The AI/Agent view now lives in its own left panel, not in the sidebar.
+    if (name === 'ai-chat') {
+      toggleAgentPanel(true);
+      return;
+    }
     document.querySelectorAll('.activity-icon[data-view]').forEach((icon) => {
       icon.classList.toggle('active', icon.getAttribute('data-view') === name);
     });
@@ -46,6 +51,42 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.querySelectorAll('.activity-icon[data-view]').forEach((icon) => {
     icon.addEventListener('click', () => switchView(icon.getAttribute('data-view')));
   });
+
+  // ---------------------------------------------------------------------------
+  // Agent Panel (left side, between the sidebar and the editor)
+  // ---------------------------------------------------------------------------
+  const agentPanel = document.getElementById('agent-panel');
+
+  function toggleAgentPanel(force) {
+    if (!agentPanel) return false;
+    const willShow = (typeof force === 'boolean') ? force : agentPanel.classList.contains('hidden');
+    agentPanel.classList.toggle('hidden', !willShow);
+    document.querySelectorAll('.activity-icon[data-panel-toggle="ai"]').forEach((icon) => {
+      icon.classList.toggle('active', willShow);
+    });
+    if (willShow && window.ai && window.ai.input) {
+      try { window.ai.input.focus(); } catch (e) { /* input not ready */ }
+    }
+    if (window.editor && typeof window.editor.relayout === 'function') window.editor.relayout();
+    return willShow;
+  }
+  window.toggleAgentPanel = toggleAgentPanel;
+  window.isAgentPanelOpen = () => !!(agentPanel && !agentPanel.classList.contains('hidden'));
+
+  document.querySelectorAll('.activity-icon[data-panel-toggle]').forEach((icon) => {
+    icon.addEventListener('click', () => toggleAgentPanel());
+  });
+
+  // Reflect the panel's initial state on the activity icon.
+  if (agentPanel) {
+    document.querySelectorAll('.activity-icon[data-panel-toggle="ai"]').forEach((icon) => {
+      icon.classList.toggle('active', !agentPanel.classList.contains('hidden'));
+    });
+  }
+
+  // "Open Folder" button on the empty state.
+  const emptyOpenFolderBtn = document.getElementById('empty-open-folder-btn');
+  if (emptyOpenFolderBtn) emptyOpenFolderBtn.onclick = () => window.explorer.openFolder();
 
   // ---------------------------------------------------------------------------
   // Top Bar Action Buttons
@@ -120,6 +161,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     P.register('view.explorer', { title: 'View: Show Explorer', keyHint: 'Ctrl+Shift+E', category: 'View', handler: () => switchSidebarView('explorer') });
     P.register('view.search', { title: 'View: Find in Files', keyHint: 'Ctrl+Shift+F', category: 'View', handler: () => switchSidebarView('search') });
     P.register('view.aiChat', { title: 'View: Show AI Chat', category: 'View', handler: () => switchSidebarView('ai-chat') });
+    P.register('view.toggleAgentPanel', { title: 'View: Toggle Agent Panel', keyHint: 'Ctrl+Shift+A', category: 'View', handler: () => toggleAgentPanel() });
 
     P.register('ai.agentMode', { title: 'AI: Switch to Agent Mode', category: 'AI', handler: () => { switchSidebarView('ai-chat'); if (window.ai) { window.ai.setMode('agent'); window.ai.input.focus(); } } });
     P.register('ai.chatMode', { title: 'AI: Switch to Chat Mode', category: 'AI', handler: () => { switchSidebarView('ai-chat'); if (window.ai) window.ai.setMode('chat'); } });
@@ -169,6 +211,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else if (e.shiftKey && (k === 'f' || k === 'F')) {
       e.preventDefault();
       switchSidebarView('search');
+    } else if (e.shiftKey && (k === 'a' || k === 'A')) {
+      e.preventDefault();
+      toggleAgentPanel();
     } else if (k === ',') {
       e.preventDefault();
       if (window.settingsModal) window.settingsModal.open();
@@ -176,9 +221,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Open the current project folder as the initial workspace
+  // Startup: open NO project — the IDE starts empty and the user picks a
+  // folder with Ctrl+O / the Open Folder button / the top-bar folder icon.
   // ---------------------------------------------------------------------------
-  setTimeout(async () => {
-    await window.explorer.openFolder('d:/Electron Application/Cloud Code');
-  }, 300);
+  const startEmptyState = () => {
+    switchSidebarView('explorer');
+    const empty = document.getElementById('empty-state');
+    if (empty) empty.style.display = '';
+  };
+  setTimeout(startEmptyState, 150);
 });

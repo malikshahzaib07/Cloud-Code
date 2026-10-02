@@ -131,10 +131,26 @@ class EditorManager {
         this.saveActiveFile();
       });
 
-      window.addEventListener('resize', () => {
-        if (this.activeEditor) this.activeEditor.layout();
-        if (this.diffEditor) this.diffEditor.layout();
-      });
+      window.addEventListener('resize', () => this.relayout());
+
+      // Toggling or dragging the agent panel resizes the host without a window
+      // resize event, so watch the host box and relayout on the next frame.
+      if (typeof ResizeObserver !== 'undefined' && this.host) {
+        try {
+          this._relayoutQueued = false;
+          this.hostObserver = new ResizeObserver(() => {
+            if (this._relayoutQueued) return;
+            this._relayoutQueued = true;
+            requestAnimationFrame(() => {
+              this._relayoutQueued = false;
+              this.relayout();
+            });
+          });
+          this.hostObserver.observe(this.host);
+        } catch (e) {
+          // ResizeObserver unavailable — the window resize listener still works
+        }
+      }
 
       this._editorReady = true;
       const readyCbs = this._readyCallbacks.splice(0);
@@ -278,6 +294,16 @@ class EditorManager {
   // -------------------------------------------------------------------------
   // Diff review tabs
   // -------------------------------------------------------------------------
+  /** Re-run Monaco layout (after a container resize). */
+  relayout() {
+    try {
+      if (this.activeEditor) this.activeEditor.layout();
+      if (this.diffEditor) this.diffEditor.layout();
+    } catch (e) {
+      // editor not created yet
+    }
+  }
+
   openDiffTab(opts) {
     if (!this.monacoInstance) {
       this.pendingDiffOpen = opts;

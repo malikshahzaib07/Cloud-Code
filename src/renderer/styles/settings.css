@@ -94,6 +94,7 @@
 
 /* Body / pages */
 .settings-body {
+  min-height: 0; /* flex child — required for `overflow` to actually scroll */
   overflow-y: auto;
   padding: 16px 20px;
   flex: 1;

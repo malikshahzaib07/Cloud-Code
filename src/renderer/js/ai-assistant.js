@@ -122,6 +122,12 @@ class AIAssistant {
         ? 'Describe a task for the agent… (@ attaches files)'
         : 'Ask AI about your project… (@ attaches files)';
     }
+    // Let the chat control bar mirror the mode (it also dispatches back).
+    try {
+      window.dispatchEvent(new CustomEvent('chat:mode-set', { detail: { mode: this.mode } }));
+    } catch (e) {
+      // CustomEvent unavailable (plain-browser preview)
+    }
   }
 
   // ==========================================================================
@@ -194,8 +200,25 @@ class AIAssistant {
 
     // Resolve @file mentions into an attached-context block
     const mention = await this.resolveMentions(userText);
-    const fullText = mention ? userText + mention.block : userText;
-    const preview = mention ? '📎 Attached: ' + mention.list.join(', ') : '';
+    // Resolve files attached with the paperclip button
+    const attach = await this.buildAttachmentBlock();
+
+    let fullText = userText;
+    const attached = [];
+    if (mention) {
+      fullText += mention.block;
+      attached.push(...mention.list);
+    }
+    if (attach) {
+      fullText += attach.block;
+      attached.push(...attach.list);
+    }
+    const preview = attached.length ? '📎 Attached: ' + attached.join(', ') : '';
+
+    // Attachments are one-shot: clear the chips once they reach the model.
+    if (window.chatControls && window.chatControls.clearAttachments) {
+      window.chatControls.clearAttachments();
+    }
 
     if (this.mode === 'agent') {
       if (window.agent && window.agent.handleUserPrompt) {
@@ -205,6 +228,53 @@ class AIAssistant {
     }
 
     this.sendChat(userText, fullText, preview);
+  }
+
+  // ==========================================================================
+  // Attachments (paperclip) + thinking level
+  // ==========================================================================
+  async buildAttachmentBlock() {
+    if (!window.chatControls || typeof window.chatControls.getAttachments !== 'function') return null;
+    let files;
+    try {
+      files = window.chatControls.getAttachments() || [];
+    } catch (e) {
+      return null;
+    }
+    if (!files.length || !window.electronAPI || !window.electronAPI.readFile) return null;
+
+    const MAX_FILES = 4;
+    const MAX_CHARS = 8000;
+    const names = [];
+    const blocks = [];
+    for (const f of files.slice(0, MAX_FILES)) {
+      if (!f || !f.path) continue;
+      try {
+        const content = await window.electronAPI.readFile(f.path);
+        if (typeof content !== 'string' || !content) continue;
+        const safePath = String(f.path).replace(/"/g, '');
+        blocks.push(`<file path="${safePath}">\n${content.slice(0, MAX_CHARS)}\n</file>`);
+        names.push(f.name || safePath);
+      } catch (e) {
+        // unreadable file — skip it
+      }
+    }
+    if (!blocks.length) return null;
+    return { block: '\n\n[Attached files]\n' + blocks.join('\n\n'), list: names };
+  }
+
+  thinkDirective() {
+    const level = window.AppSettings ? window.AppSettings.get('thinkLevel') : 'medium';
+    switch (level) {
+      case 'off':
+        return '';
+      case 'low':
+        return 'Answer directly and concisely. Prefer the shortest correct answer over lengthy deliberation.';
+      case 'high':
+        return 'Think carefully step by step before answering. Consider edge cases, verify your reasoning, and give a precise, complete answer.';
+      default:
+        return 'Think through the problem briefly before answering. Be accurate, practical and concise.';
+    }
   }
 
   sendChat(displayText, fullText, preview) {
@@ -225,6 +295,11 @@ class AIAssistant {
     }
 
     this.appendUserMessage(displayText, contextPreview);
+    // Seed the conversation with a reasoning directive matching "Think" level.
+    if (!this.history.length) {
+      const directive = this.thinkDirective();
+      if (directive) this.history.push({ role: 'system', content: directive });
+    }
     this.history.push({ role: 'user', content: prompt });
 
     this.currentResponseText = '';

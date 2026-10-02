@@ -122,6 +122,34 @@ ipcMain.handle('dialog:openDirectory', async () => {
   return filePaths[0];
 });
 
+// Multi-file picker for the chat "Attach files" button.
+// Returns [{ path, name, size }] (bytes); [] when canceled or on error.
+ipcMain.handle('dialog:openFiles', async () => {
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile', 'multiSelections']
+    });
+    if (canceled || !filePaths || filePaths.length === 0) return [];
+    const out = [];
+    for (const p of filePaths.slice(0, 25)) {
+      try {
+        const st = await fsp.stat(p);
+        if (!st.isFile()) continue;
+        out.push({
+          path: p,
+          name: String(p).split(/[\\/]/).pop() || p,
+          size: st.size
+        });
+      } catch (e) {
+        // skip files we cannot stat
+      }
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+});
+
 ipcMain.handle('fs:readDirectory', async (event, dirPath) => {
   try {
     const entries = await fsp.readdir(dirPath, { withFileTypes: true });

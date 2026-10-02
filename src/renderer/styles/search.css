@@ -45,6 +45,7 @@
 
 .search-results {
   flex: 1;
+  min-height: 0; /* flex child — required for `overflow` to actually scroll */
   overflow: auto;
   padding: 4px 0 12px;
 }
