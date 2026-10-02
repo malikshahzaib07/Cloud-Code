@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud Code</title>
+  <link rel="stylesheet" href="../../node_modules/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles/vscode.css">
+  <!-- Agentic IDE modules -->
+  <link rel="stylesheet" href="styles/agentic.css">
+  <link rel="stylesheet" href="styles/palette.css">
+  <link rel="stylesheet" href="styles/inline-edit.css">
+  <link rel="stylesheet" href="styles/autocomplete.css">
+  <link rel="stylesheet" href="styles/search.css">
+  <link rel="stylesheet" href="styles/settings.css">
+</head>
+<body>
+  <div id="app">
+    <!-- VS Code Top Title Bar -->
+    <div id="titlebar">
+      <div class="app-logo">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="#007acc">
+          <path d="M14.5 3.5l-3-2a.5.5 0 0 0-.5 0L1.5 7.5a.5.5 0 0 0 0 .9l9.5 6a.5.5 0 0 0 .5 0l3-2a.5.5 0 0 0 .2-.4v-8.5a.5.5 0 0 0-.2-.5zM11 11.2L4.3 8 11 4.8v6.4z"/>
+        </svg>
+        <span>Cloud Code</span>
+      </div>
+      <div class="window-title" id="active-file-title">Cloud Code - AI Code Editor</div>
+      <div class="quick-actions">
+        <button class="icon-btn" id="open-folder-top-btn" title="Open Folder (Ctrl+O)">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 14.5 4H7.414l-1.707-1.707A1 1 0 0 0 5 2H1.5z"/></svg>
+        </button>
+        <button class="icon-btn" id="toggle-terminal-btn" title="Toggle Terminal (Ctrl+\`)">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3zm2-1a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H2z"/><path d="M3.146 5.146a.5.5 0 0 1 .708 0L6.707 8l-2.853 2.854a.5.5 0 1 1-.708-.708L5.293 8 3.146 5.854a.5.5 0 0 1 0-.708zM7.5 10.5a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 0 1H8a.5.5 0 0 1-.5-.5z"/></svg>
+        </button>
+        <button class="icon-btn" id="command-palette-btn" title="Command Palette (Ctrl+Shift+P)">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M2 2h12v12H2V2zm1 1v10h10V3H3zm2.5 2.5h5v1.25H7.75v4.5h-1.5v-4.5H5.5V5.5z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Workspace -->
+    <div id="main">
+      <!-- VS Code Activity Bar -->
+      <div id="activity-bar">
+        <div class="activity-icon active" data-view="explorer" title="Explorer (Ctrl+Shift+E)">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v13a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"/></svg>
+        </div>
+        <div class="activity-icon" data-view="search" title="Search (Ctrl+Shift+F)">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        </div>
+        <div class="activity-icon" data-view="ai-chat" title="Cloud Code AI Assistant">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="13" r="1.5"/><circle cx="15" cy="13" r="1.5"/></svg>
+        </div>
+        <div class="activity-spacer"></div>
+        <div class="activity-icon" id="open-settings-btn" title="Settings">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div id="sidebar">
+        <!-- Explorer View -->
+        <div id="explorer-view" class="sidebar-view active">
+          <div class="sidebar-header">
+            <span>EXPLORER</span>
+            <div class="actions">
+              <button class="icon-btn" id="new-file-btn" title="New File">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M9 1H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6L9 1zm4 12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h4.5L13 6.5V13z"/><path d="M8 7v2H6v1h2v2h1v-2h2V9H9V7H8z"/></svg>
+              </button>
+              <button class="icon-btn" id="new-folder-btn" title="New Folder">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85A.5.5 0 0 0 6.5 2h-5A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-8A1.5 1.5 0 0 0 14.5 3zm-4 5.5h-2v2h-1v-2h-2v-1h2v-2h1v2h2v1z"/></svg>
+              </button>
+              <button class="icon-btn" id="refresh-explorer-btn" title="Refresh">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="tree-container" id="file-tree">
+            <!-- Dynamic tree injected here -->
+          </div>
+        </div>
+
+        <!-- Workspace Search View (markup injected by search.js) -->
+        <div id="search-view" class="sidebar-view"></div>
+
+        <!-- AI Chat View -->
+        <div id="ai-chat-view" class="sidebar-view">
+          <div class="sidebar-header">
+            <span>CLOUD CODE AI</span>
+            <div class="actions">
+              <button class="icon-btn" id="clear-chat-btn" title="Clear Chat">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M2.5 1a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1H3v9a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V4h.5a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H10a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1H2.5zm3 4a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-1 0v-7a.5.5 0 0 1 .5-.5zM8 5a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-1 0v-7A.5.5 0 0 1 8 5zm3 .5v7a.5.5 0 0 1-1 0v-7a.5.5 0 0 1 1 0z"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="ai-header-controls">
+            <div class="mode-toggle" id="chat-mode-toggle" title="Chat: ask questions • Agent: let AI edit files & run commands">
+              <button id="mode-chat-btn" class="mode-btn active">Chat</button>
+              <button id="mode-agent-btn" class="mode-btn">Agent</button>
+            </div>
+            <div class="badge" title="Private connection active">
+              <span class="badge-dot"></span>
+              <span>Local GPU Tunnel</span>
+            </div>
+            <select id="model-select" class="model-select">
+              <option value="qwen-2.5-coder-7b">qwen-2.5-coder-7b</option>
+              <option value="deepseek-r1-8b">deepseek-r1-8b</option>
+            </select>
+          </div>
+
+          <div id="chat-messages">
+            <!-- AI Chat messages -->
+          </div>
+
+          <div class="chat-footer">
+            <div class="quick-prompts">
+              <button class="quick-prompt-btn" data-prompt="Explain this selected code">Explain Code</button>
+              <button class="quick-prompt-btn" data-prompt="Find potential bugs and optimize this code">Find Bugs</button>
+              <button class="quick-prompt-btn" data-prompt="Refactor this code cleanly">Refactor</button>
+              <button class="quick-prompt-btn" data-prompt="Generate comprehensive unit tests for this code">Unit Tests</button>
+            </div>
+            <div class="input-box-wrapper">
+              <textarea id="chat-input" placeholder="Ask AI about your project... (Shift+Enter for newline)"></textarea>
+              <button id="send-msg-btn" title="Send (Enter)">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M15.854.146a.5.5 0 0 1 .11.54l-5.8 14.5a.5.5 0 0 1-.928.008L6.471 9.53 1.006 6.764a.5.5 0 0 1 .008-.928L15.514.036a.5.5 0 0 1 .34.11z"/></svg>
+              </button>
+            </div>
+            <div id="mention-popup" class="mention-popup hidden"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Editor Container -->
+      <div id="editor-container">
+        <!-- Open Tabs Bar -->
+        <div id="tabs-bar"></div>
+
+        <!-- Monaco Host Element -->
+        <div id="monaco-host">
+          <div id="empty-state">
+            <svg viewBox="0 0 16 16" width="64" height="64" fill="#333333">
+              <path d="M14.5 3.5l-3-2a.5.5 0 0 0-.5 0L1.5 7.5a.5.5 0 0 0 0 .9l9.5 6a.5.5 0 0 0 .5 0l3-2a.5.5 0 0 0 .2-.4v-8.5a.5.5 0 0 0-.2-.5zM11 11.2L4.3 8 11 4.8v6.4z"/>
+            </svg>
+            <div style="font-size: 16px; font-weight: 500; color: #888;">Cloud Code AI</div>
+            <div class="shortcuts">
+              <div><kbd>Ctrl + P</kbd> Quick Open File</div>
+              <div><kbd>Ctrl + Shift + P</kbd> Command Palette</div>
+              <div><kbd>Ctrl + K</kbd> Inline AI Edit</div>
+              <div><kbd>Ctrl + O</kbd> Open Folder</div>
+              <div><kbd>Ctrl + S</kbd> Save File</div>
+              <div><kbd>Ctrl + `</kbd> Toggle Terminal</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom Panel (Terminal) -->
+        <div id="bottom-panel">
+          <div class="panel-tabs">
+            <div class="panel-tab active" data-tab="terminal">TERMINAL</div>
+            <div class="panel-tab" data-tab="output">OUTPUT</div>
+            <div class="panel-tab" data-tab="problems">PROBLEMS</div>
+          </div>
+          <div id="terminal-view"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div id="statusbar">
+      <div class="statusbar-section">
+        <div class="statusbar-item" id="statusbar-branch">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.492 2.492 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z"/></svg>
+          <span>main</span>
+        </div>
+        <div class="statusbar-item" id="statusbar-ai-status">
+          <span>● AI Ready</span>
+        </div>
+        <div class="statusbar-item hidden" id="statusbar-changes" title="Agent changes — click to review">
+          <span>◈ 0 changes</span>
+        </div>
+        <div class="statusbar-item hidden" id="statusbar-agent-steps">
+          <span>Agent: step 0</span>
+        </div>
+      </div>
+      <div class="statusbar-section">
+        <div class="statusbar-item" id="statusbar-pos">Ln 1, Col 1</div>
+        <div class="statusbar-item">UTF-8</div>
+        <div class="statusbar-item" id="statusbar-lang">Plain Text</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Monaco AMD Loader -->
+  <script src="../../node_modules/monaco-editor/min/vs/loader.js"></script>
+  <!-- xterm.js -->
+  <script src="../../node_modules/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+
+  <!-- Application Modules -->
+  <script src="js/icons.js"></script>
+  <script src="js/terminal.js"></script>
+  <script src="js/editor.js"></script>
+  <script src="js/explorer.js"></script>
+  <script src="js/ai-assistant.js"></script>
+  <!-- Agentic IDE modules -->
+  <script src="js/agent.js"></script>
+  <script src="js/palette.js"></script>
+  <script src="js/autocomplete.js"></script>
+  <script src="js/inline-edit.js"></script>
+  <script src="js/search.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

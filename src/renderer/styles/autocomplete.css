@@ -1,0 +1,5 @@
+/* GhostAutocomplete — inline ghost-text completion styling */
+.ghost-text {
+  color: rgba(202, 202, 202, 0.45);
+  font-style: italic;
+}

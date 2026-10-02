@@ -1,0 +1,63 @@
+{
+  "name": "cloud-code",
+  "version": "1.0.0",
+  "description": "Cloud Code - AI-Powered Code Editor inspired by VS Code",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.malikshahzaib07.cloudcode",
+    "productName": "Cloud Code",
+    "artifactName": "CloudCode-Setup-${version}.exe",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "asar": false,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Cloud Code",
+      "shortcutNameUninstaller": "Cloud Code Uninstall"
+    }
+  },
+  "keywords": [
+    "electron",
+    "code-editor",
+    "ai",
+    "vscode",
+    "monaco"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@vscode/codicons": "^0.0.36",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "monaco-editor": "^0.52.2",
+    "xterm": "^5.3.0",
+    "xterm-addon-fit": "^0.8.0"
+  },
+  "devDependencies": {
+    "electron": "^34.2.0",
+    "electron-builder": "^26.15.3"
+  }
+}

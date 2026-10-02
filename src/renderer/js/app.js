@@ -1,0 +1,184 @@
+// Main Application Coordinator
+document.addEventListener('DOMContentLoaded', async () => {
+  // 1) Load persisted settings first (other modules read them at runtime)
+  if (window.AppSettings && window.AppSettings.load) {
+    try { await window.AppSettings.load(); } catch (e) { console.warn('settings load failed', e); }
+  }
+
+  // 2) Initialize Core Subsystems
+  window.editor = new EditorManager('monaco-host', 'tabs-bar');
+  window.explorer = new FileExplorer('file-tree');
+  window.terminal = new TerminalManager('terminal-view');
+  window.ai = new AIAssistant('chat-messages', 'chat-input', 'send-msg-btn');
+
+  // 3) Agentic modules (all self-guarded; classes defined in their own files).
+  //    palette.js / settings.js / autocomplete.js also self-boot at parse time,
+  //    so only create instances that don't already exist.
+  window.agent = window.AgentController ? new AgentController() : null;
+  if (!window.palette && window.CommandPalette) window.palette = new CommandPalette();
+  if (!window.ghostAutocomplete && window.GhostAutocomplete) {
+    window.__ghostAutocompleteBooted = true; // prevent the module's self-boot from double-instantiating
+    window.ghostAutocomplete = new GhostAutocomplete();
+  }
+  if (!window.inlineEdit && window.InlineEdit) window.inlineEdit = new InlineEdit();
+  if (!window.workspaceSearch && window.WorkspaceSearch) window.workspaceSearch = new WorkspaceSearch();
+  if (!window.settingsModal && window.SettingsModal) window.settingsModal = new SettingsModal();
+
+  // Show Chat/Agent run bar for the initial mode
+  if (window.ai && window.agent) window.agent.setVisible(window.ai.mode === 'agent');
+
+  // ---------------------------------------------------------------------------
+  // Activity Bar Navigation
+  // ---------------------------------------------------------------------------
+  function switchView(name) {
+    document.querySelectorAll('.activity-icon[data-view]').forEach((icon) => {
+      icon.classList.toggle('active', icon.getAttribute('data-view') === name);
+    });
+    document.querySelectorAll('.sidebar-view').forEach((view) => {
+      view.classList.toggle('active', view.id === `${name}-view`);
+    });
+    if (name === 'search' && window.workspaceSearch && window.workspaceSearch.focusInput) {
+      window.workspaceSearch.focusInput();
+    }
+  }
+  window.switchSidebarView = switchView;
+
+  document.querySelectorAll('.activity-icon[data-view]').forEach((icon) => {
+    icon.addEventListener('click', () => switchView(icon.getAttribute('data-view')));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Top Bar Action Buttons
+  // ---------------------------------------------------------------------------
+  const openFolderTopBtn = document.getElementById('open-folder-top-btn');
+  if (openFolderTopBtn) openFolderTopBtn.onclick = () => window.explorer.openFolder();
+
+  const toggleTerminalBtn = document.getElementById('toggle-terminal-btn');
+  const bottomPanel = document.getElementById('bottom-panel');
+  if (toggleTerminalBtn && bottomPanel) {
+    toggleTerminalBtn.onclick = () => {
+      if (bottomPanel.style.display === 'none') {
+        bottomPanel.style.display = 'flex';
+        window.terminal.fit();
+      } else {
+        bottomPanel.style.display = 'none';
+      }
+    };
+  }
+
+  const paletteBtn = document.getElementById('command-palette-btn');
+  if (paletteBtn && window.palette) {
+    paletteBtn.onclick = () => window.palette.open('commands');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Explorer Header Action Buttons
+  // ---------------------------------------------------------------------------
+  const newFileBtn = document.getElementById('new-file-btn');
+  if (newFileBtn) newFileBtn.onclick = () => window.explorer.createNewFile();
+
+  const newFolderBtn = document.getElementById('new-folder-btn');
+  if (newFolderBtn) newFolderBtn.onclick = () => window.explorer.createNewFolder();
+
+  const refreshExplorerBtn = document.getElementById('refresh-explorer-btn');
+  if (refreshExplorerBtn) refreshExplorerBtn.onclick = () => window.explorer.render();
+
+  // ---------------------------------------------------------------------------
+  // Settings (real modal instead of alert())
+  // ---------------------------------------------------------------------------
+  const settingsBtn = document.getElementById('open-settings-btn');
+  if (settingsBtn) {
+    settingsBtn.onclick = () => {
+      if (window.settingsModal) window.settingsModal.open();
+      else if (window.electronAPI && window.electronAPI.getAiConfig) {
+        window.electronAPI.getAiConfig().then((c) =>
+          alert(`API: ${c.baseUrl}\nKey: ${c.apiKey}\nModel: ${c.model}`));
+      }
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Command Palette — command registry
+  // ---------------------------------------------------------------------------
+  const quickPrompt = (text) => {
+    if (window.ai) {
+      switchSidebarView('ai-chat');
+      window.ai.sendPromptWithContext(text);
+    }
+  };
+
+  if (window.palette) {
+    const P = window.palette;
+    P.register('file.openFolder', { title: 'File: Open Folder…', keyHint: 'Ctrl+O', category: 'File', handler: () => window.explorer.openFolder() });
+    P.register('file.newFile', { title: 'File: New File', category: 'File', handler: () => window.explorer.createNewFile() });
+    P.register('file.newFolder', { title: 'File: New Folder', category: 'File', handler: () => window.explorer.createNewFolder() });
+    P.register('file.save', { title: 'File: Save', keyHint: 'Ctrl+S', category: 'File', handler: () => window.editor.saveActiveFile() });
+    P.register('file.saveAll', { title: 'File: Save All', category: 'File', handler: () => window.editor.saveAllFiles() });
+    P.register('file.closeEditor', { title: 'View: Close Editor', keyHint: 'Ctrl+W', category: 'View', handler: () => { if (window.editor.activeKey) window.editor.closeByKey(window.editor.activeKey); } });
+
+    P.register('view.terminal', { title: 'View: Toggle Terminal', keyHint: 'Ctrl+`', category: 'View', handler: () => { if (toggleTerminalBtn) toggleTerminalBtn.click(); } });
+    P.register('view.explorer', { title: 'View: Show Explorer', keyHint: 'Ctrl+Shift+E', category: 'View', handler: () => switchSidebarView('explorer') });
+    P.register('view.search', { title: 'View: Find in Files', keyHint: 'Ctrl+Shift+F', category: 'View', handler: () => switchSidebarView('search') });
+    P.register('view.aiChat', { title: 'View: Show AI Chat', category: 'View', handler: () => switchSidebarView('ai-chat') });
+
+    P.register('ai.agentMode', { title: 'AI: Switch to Agent Mode', category: 'AI', handler: () => { switchSidebarView('ai-chat'); if (window.ai) { window.ai.setMode('agent'); window.ai.input.focus(); } } });
+    P.register('ai.chatMode', { title: 'AI: Switch to Chat Mode', category: 'AI', handler: () => { switchSidebarView('ai-chat'); if (window.ai) window.ai.setMode('chat'); } });
+    P.register('ai.newTask', { title: 'Agent: New Task', category: 'Agent', handler: () => { switchSidebarView('ai-chat'); if (window.agent) window.agent.newTask(); if (window.ai) { window.ai.setMode('agent'); window.ai.input.focus(); } } });
+    P.register('ai.clearChat', { title: 'Agent/Clear Chat History', category: 'AI', handler: () => { const b = document.getElementById('clear-chat-btn'); if (b) b.click(); } });
+    P.register('ai.explain', { title: 'AI: Explain Selected Code', category: 'AI', handler: () => quickPrompt('Explain this selected code') });
+    P.register('ai.findBugs', { title: 'AI: Find Bugs in Selected Code', category: 'AI', handler: () => quickPrompt('Find potential bugs and optimize this code') });
+    P.register('ai.refactor', { title: 'AI: Refactor Selected Code', category: 'AI', handler: () => quickPrompt('Refactor this code cleanly') });
+    P.register('ai.tests', { title: 'AI: Generate Unit Tests', category: 'AI', handler: () => quickPrompt('Generate comprehensive unit tests for this code') });
+
+    P.register('prefs.settings', { title: 'Preferences: Open Settings', keyHint: 'Ctrl+,', category: 'Preferences', handler: () => window.settingsModal && window.settingsModal.open() });
+    P.register('prefs.autocomplete', { title: 'Preferences: Toggle Ghost-Text Autocomplete', category: 'Preferences', handler: () => {
+      const cur = window.AppSettings ? window.AppSettings.get('autocompleteEnabled') : true;
+      if (window.AppSettings) window.AppSettings.set('autocompleteEnabled', !cur);
+    } });
+    P.register('agent.reviewChanges', { title: 'Agent: Review Workspace Changes', category: 'Agent', handler: () => { if (window.agent) window.agent.toggleChangesPopup(); } });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Keyboard Shortcuts
+  // ---------------------------------------------------------------------------
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const k = e.key;
+
+    if (k === 'o' || k === 'O') {
+      e.preventDefault();
+      window.explorer.openFolder();
+    } else if (k === 's' && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      window.editor.saveActiveFile();
+    } else if (k === 'S' && e.shiftKey) {
+      e.preventDefault();
+      window.editor.saveAllFiles();
+    } else if (k === '`') {
+      e.preventDefault();
+      if (toggleTerminalBtn) toggleTerminalBtn.click();
+    } else if (k === 'w' || k === 'W') {
+      const paletteOpen = !!(window.palette && typeof window.palette.isOpen === 'function' && window.palette.isOpen());
+      if (!paletteOpen && window.editor && window.editor.activeKey) {
+        e.preventDefault();
+        window.editor.closeByKey(window.editor.activeKey);
+      }
+    } else if (e.shiftKey && (k === 'e' || k === 'E')) {
+      e.preventDefault();
+      switchSidebarView('explorer');
+    } else if (e.shiftKey && (k === 'f' || k === 'F')) {
+      e.preventDefault();
+      switchSidebarView('search');
+    } else if (k === ',') {
+      e.preventDefault();
+      if (window.settingsModal) window.settingsModal.open();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Open the current project folder as the initial workspace
+  // ---------------------------------------------------------------------------
+  setTimeout(async () => {
+    await window.explorer.openFolder('d:/Electron Application/Cloud Code');
+  }, 300);
+});

@@ -1,0 +1,155 @@
+/* ==========================================================================
+   Inline Edit (Ctrl+K) — floating prompt widget, preview action bar,
+   green whole-line preview highlighting and the removed-lines popover.
+   All selectors are namespaced with .ie- / .inline- (no global names).
+   #monaco-host is already position: relative (vscode.css) — not redefined.
+   ========================================================================== */
+
+.inline-edit-widget,
+.inline-diff-bar {
+  position: absolute;
+  background: #1e1e1e;
+  border: 1px solid #007acc;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 60;
+}
+
+/* --- Prompt widget ------------------------------------------------------- */
+.inline-edit-widget {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  min-width: 340px;
+}
+
+.ie-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ie-spark {
+  color: #007acc;
+}
+
+.ie-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #cccccc;
+  font-size: 13px;
+  width: 320px;
+  font-family: inherit;
+}
+
+.ie-input:disabled {
+  color: #6a6a6a;
+}
+
+.ie-key-hint {
+  color: #666;
+  font-size: 11px;
+  border: 1px solid #444;
+  border-radius: 3px;
+  padding: 0 5px;
+}
+
+.ie-status {
+  font-size: 11px;
+  color: #858585;
+  margin-top: 4px;
+  min-height: 14px;
+}
+
+.ie-status.error {
+  color: #f87171;
+}
+
+/* --- Preview action bar -------------------------------------------------- */
+.inline-diff-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.ie-stats b {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.ie-add {
+  color: #3fb950;
+}
+
+.ie-del {
+  color: #f85149;
+}
+
+.ie-btn {
+  border: 1px solid #454545;
+  background: #2d2d2d;
+  color: #cccccc;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.ie-btn:hover {
+  background: #3a3a3a;
+}
+
+.ie-accept {
+  background: #2ea043;
+  border-color: #2ea043;
+  color: #fff;
+}
+
+.ie-accept:hover {
+  background: #3fb950;
+}
+
+.ie-status-inline {
+  color: #858585;
+  font-size: 11px;
+}
+
+/* --- Preview highlighting (Monaco line decorations) ---------------------- */
+.ie-line-added {
+  background: rgba(46, 160, 67, 0.18) !important;
+}
+
+.ie-gutter-add {
+  background: #2ea043;
+  width: 3px !important;
+  margin-left: 2px;
+}
+
+/* --- Removed-lines popover ---------------------------------------------- */
+.ie-removed-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: #252526;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  padding: 6px;
+  max-height: 200px;
+  overflow: auto;
+  min-width: 260px;
+  z-index: 61;
+}
+
+.ie-removed-line {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.12);
+  text-decoration: line-through;
+  padding: 1px 6px;
+  white-space: pre;
+}
