@@ -34,9 +34,7 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "shortcutName": "Cloud Code",
-      "shortcutNameUninstaller": "Cloud Code Uninstall"
+      "allowToChangeInstallationDirectory": true
     }
   },
   "keywords": [
