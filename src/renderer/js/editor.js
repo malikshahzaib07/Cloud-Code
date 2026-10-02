@@ -89,6 +89,30 @@ class EditorManager {
         }
       });
 
+      // Light counterpart (the app ships with the light theme as default).
+      monaco.editor.defineTheme('cloudcode-light', {
+        base: 'vs',
+        inherit: true,
+        rules: [
+          { token: 'comment', foreground: '008000' },
+          { token: 'keyword', foreground: '0000ff' },
+          { token: 'string', foreground: 'a31515' },
+          { token: 'number', foreground: '098658' },
+          { token: 'type', foreground: '267f99' },
+          { token: 'function', foreground: '795e26' }
+        ],
+        colors: {
+          'editor.background': '#ffffff',
+          'editor.foreground': '#1f1f1f',
+          'editorLineNumber.foreground': '#9d9d9d',
+          'editorLineNumber.activeForeground': '#333333',
+          'editorCursor.foreground': '#000000',
+          'editor.selectionBackground': '#add6ff',
+          'editor.inactiveSelectionBackground': '#e5ebf1',
+          'editorGutter.background': '#ffffff'
+        }
+      });
+
       // Code editor container
       this.editorDiv = document.createElement('div');
       this.editorDiv.id = 'code-editor-pane';
@@ -97,7 +121,7 @@ class EditorManager {
       this.host.appendChild(this.editorDiv);
 
       this.activeEditor = monaco.editor.create(this.editorDiv, {
-        theme: 'cloudcode-dark',
+        theme: this.resolveMonacoTheme(),
         automaticLayout: true,
         fontSize: 14,
         fontFamily: 'Consolas, "Courier New", monospace',
@@ -302,6 +326,102 @@ class EditorManager {
     } catch (e) {
       // editor not created yet
     }
+  }
+
+  /** Map a UI theme name to a Monaco theme id (accepts light/dark/cloud-* forms). */
+  resolveMonacoTheme(name) {
+    const t = String(name == null ? '' : name).toLowerCase();
+    if (t === 'cloud-light' || t === 'light' || t === 'cloudcode-light') return 'cloudcode-light';
+    if (t === 'cloud-dark' || t === 'dark' || t === 'cloudcode-dark') return 'cloudcode-dark';
+    const dom = (document.documentElement && document.documentElement.dataset &&
+      document.documentElement.dataset.theme) || '';
+    return dom === 'light' ? 'cloudcode-light' : 'cloudcode-dark';
+  }
+
+  /** Switch editor theme at runtime. Accepts 'light'/'dark'/'cloud-light'/'cloud-dark'. */
+  setTheme(name) {
+    const id = this.resolveMonacoTheme(name);
+    this.themeName = id;
+    try {
+      if (this.monacoInstance && this.monacoInstance.editor) this.monacoInstance.editor.setTheme(id);
+    } catch (e) {
+      // monaco not initialised yet
+    }
+    return id;
+  }
+
+  updateWindowTitle() {
+    const tab = this.activeFilePath ? this.tabs.get(this.activeFilePath) : null;
+    const el = document.getElementById('active-file-title');
+    if (!el) return;
+    if (tab) el.textContent = `${tab.title}${tab.dirty ? ' •' : ''} - Cloud Code`;
+    else if (window.explorer && window.explorer.rootPath) {
+      const name = String(window.explorer.rootPath).split(/[\\/]/).filter(Boolean).pop();
+      el.textContent = name || 'Cloud Code';
+    } else {
+      el.textContent = 'Cloud Code - AI Code Editor';
+    }
+  }
+
+  /**
+   * Re-read files that changed on disk (agent edits, git, an external editor).
+   * Clean buffers refresh silently; buffers with unsaved edits are preserved and
+   * flagged instead of being clobbered.
+   */
+  async reloadExternallyChanged(paths) {
+    const result = { reloaded: 0, conflicted: 0 };
+    if (!paths || !paths.length || !this.tabs || this.tabs.size === 0) return result;
+
+    const normalize = (p) => String(p || '').replace(/\\/g, '/');
+    const rootNorm = normalize(window.explorer ? window.explorer.rootPath : '');
+
+    for (const rel of paths) {
+      const relNorm = normalize(rel);
+      const abs = /^[a-zA-Z]:\//.test(relNorm) ? relNorm
+        : (rootNorm ? rootNorm + '/' + relNorm.replace(/^\/+/, '') : '');
+      if (!abs) continue;
+      const tab = this.tabs.get(abs);
+      if (!tab || !tab.model) continue;
+
+      let disk = null;
+      try {
+        disk = await window.electronAPI.readFile(abs);
+      } catch (e) {
+        // removed on disk
+        if (tab.dirty) {
+          tab.deletedOnDisk = true;
+          result.conflicted++;
+        } else {
+          this.closeByKey(abs);
+        }
+        continue;
+      }
+
+      if (tab.model.getValue() === disk) {
+        tab.changedOnDisk = false;
+        tab.deletedOnDisk = false;
+        continue;
+      }
+
+      if (tab.dirty) {
+        tab.changedOnDisk = true;   // keep the user's edits
+        result.conflicted++;
+      } else {
+        // Update the baseline BEFORE setValue so the change listener sees a
+        // match and does not flag a freshly reloaded buffer as dirty.
+        tab.originalContent = disk;
+        tab.model.setValue(disk);
+        tab.dirty = false;
+        tab.changedOnDisk = false;
+        result.reloaded++;
+      }
+    }
+
+    if (result.reloaded || result.conflicted) {
+      this.renderTabs();
+      this.updateWindowTitle();
+    }
+    return result;
   }
 
   openDiffTab(opts) {

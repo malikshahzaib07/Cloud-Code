@@ -1,5 +1,13 @@
 // AI Assistant Panel — streaming chat, Chat/Agent mode routing,
 // @-mention file context, quick prompts & code actions
+//
+// Also owns the live agent "thinking" panel (namespace: think-*), which
+// renders `agent:thinking` events from agent.js as a compact, collapsible
+// block at the top of the message stream.
+
+const THINK_MAX_LINES = 30;
+const THINK_PHASES = ['planning', 'thinking', 'tool'];
+
 class AIAssistant {
   constructor(messagesId, inputId, sendBtnId) {
     this.messagesContainer = document.getElementById(messagesId);
@@ -23,6 +31,9 @@ class AIAssistant {
     this.mentionVisible = false;
     this.lastAttachments = [];
 
+    // Live agent thinking panel (see AgentThinkingPanel below)
+    this.thinkPanel = new AgentThinkingPanel(this.messagesContainer, this);
+
     this.init();
   }
 
@@ -43,6 +54,7 @@ class AIAssistant {
       this.clearBtn.onclick = () => {
         this.history = [];
         this.messagesContainer.innerHTML = '';
+        this.thinkPanel.destroy();
         if (window.agent && window.agent.reset) window.agent.reset(true);
         this.renderWelcome();
       };
@@ -55,20 +67,39 @@ class AIAssistant {
       };
     });
 
-    // Populate models from backend
-    if (window.electronAPI && window.electronAPI.listAiModels) {
+    // NOTE: the model list is owned by chat-controls.js (custom `dd-*`
+    // dropdowns). `#model-select` is kept in the DOM as a hidden proxy whose
+    // `.value` is authoritative and kept in sync by chat-controls; we only
+    // read it below at request time.
+    if (window.electronAPI && typeof window.electronAPI.listAiModels === 'function' && this.modelSelect) {
+      // Mirror the remote list into the proxy when chat-controls is absent
+      // (e.g. a bare index.html preview) so sendChat still has a value.
       window.electronAPI.listAiModels().then(models => {
-        if (models && models.length && this.modelSelect) {
-          this.modelSelect.innerHTML = '';
-          models.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = m;
-            opt.textContent = m;
-            if (m.includes('coder')) opt.selected = true;
-            this.modelSelect.appendChild(opt);
-          });
-        }
-      });
+        if (!models || !models.length || !this.modelSelect) return;
+        if (this.modelSelect.options && this.modelSelect.options.length > 1) return;
+        const current = this.modelSelect.value;
+        this.modelSelect.textContent = '';
+        models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = m;
+          this.modelSelect.appendChild(opt);
+        });
+        if (current) this.modelSelect.value = current;
+      }).catch(() => {});
+    }
+
+    // Live agent reasoning stream → thinking panel
+    window.addEventListener('agent:thinking', (e) => this.onAgentThinking(e));
+
+    // Clear the thinking panel when the agent itself resets (stop, new run).
+    if (window.agent && window.agent.reset) {
+      const agent = window.agent;
+      const originalReset = agent.reset.bind(agent);
+      agent.reset = (silent) => {
+        this.thinkPanel.destroy();
+        return originalReset(silent);
+      };
     }
 
     // IPC Streaming Listeners (chat mode)
@@ -123,6 +154,9 @@ class AIAssistant {
     if (this.modeChatBtn) this.modeChatBtn.classList.toggle('active', this.mode === 'chat');
     if (this.modeAgentBtn) this.modeAgentBtn.classList.toggle('active', this.mode === 'agent');
     if (window.agent && window.agent.setVisible) window.agent.setVisible(this.mode === 'agent');
+    // A mode switch means a different runner owns the transcript — drop the
+    // thinking panel rather than leaving stale reasoning on screen.
+    if (this.thinkPanel) this.thinkPanel.destroy();
     if (this.input) {
       this.input.placeholder = this.mode === 'agent'
         ? 'Describe a task for the agent… (@ attaches files)'
@@ -134,6 +168,25 @@ class AIAssistant {
     } catch (e) {
       // CustomEvent unavailable (plain-browser preview)
     }
+  }
+
+  // ==========================================================================
+  // Live agent thinking (agent:thinking from agent.js)
+  // ==========================================================================
+  onAgentThinking(e) {
+    const d = (e && e.detail) || {};
+    const phase = d.phase;
+    if (phase === 'done') {
+      this.thinkPanel.finish(Number(d.step) || 0);
+      return;
+    }
+    // Only agent runs produce reasoning; ignore stray events in chat mode.
+    if (this.mode !== 'agent') return;
+    this.thinkPanel.push({
+      text: d.text == null ? '' : String(d.text),
+      phase: THINK_PHASES.indexOf(phase) === -1 ? 'thinking' : phase,
+      step: Number(d.step) || 0
+    });
   }
 
   // ==========================================================================
@@ -978,4 +1031,161 @@ class AIAssistant {
   }
 }
 
+/* ==========================================================================
+   AgentThinkingPanel — compact collapsible block above the message stream.
+
+   Design choice: inline at the TOP of the message stream (not a floating
+   overlay, not pinned to the control bar) because the panel scrolls with the
+   transcript it describes, never covers messages, and dies with them.
+
+   - lines are capped at THINK_MAX_LINES (oldest dropped)
+   - never takes focus
+   - auto-scrolls only when the user is already at the bottom
+   ========================================================================== */
+class AgentThinkingPanel {
+  constructor(host, assistant) {
+    this.host = host;
+    this.assistant = assistant;
+    this.el = null;
+    this.logEl = null;
+    this.lines = [];
+    this.step = 0;
+    this.finished = false;
+    this.open = true;
+  }
+
+  isLive() { return !!this.el; }
+
+  ensure() {
+    if (this.el) return this.el;
+    if (!this.host) return null;
+
+    const el = document.createElement('div');
+    el.className = 'think-panel';
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', 'Agent reasoning');
+
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'think-head';
+    head.setAttribute('aria-expanded', 'true');
+    head.innerHTML = '<span class="think-spinner" aria-hidden="true"></span>'
+      + '<span class="think-title">Thinking</span>'
+      + '<span class="think-step"></span>'
+      + '<span class="think-caret" aria-hidden="true">▾</span>';
+    head.onclick = () => this.toggle();
+
+    const log = document.createElement('div');
+    log.className = 'think-log';
+
+    el.appendChild(head);
+    el.appendChild(log);
+
+    // Top of the stream, before any message.
+    if (this.host.insertBefore) this.host.insertBefore(el, this.host.firstChild);
+    else this.host.appendChild(el);
+
+    this.el = el;
+    this.logEl = log;
+    this.finished = false;
+    this.open = true;
+    this.render();
+    return el;
+  }
+
+  push(entry) {
+    this.ensure();
+    if (!this.el) return;
+    this.step = Math.max(this.step, entry.step || 0);
+    this.lines.push({ text: entry.text, phase: entry.phase });
+    while (this.lines.length > THINK_MAX_LINES) this.lines.shift();
+    this.finished = false;
+    this.el.classList.remove('think-done');
+    this.el.classList.add('think-live');
+    this.open = true;
+    this.render();
+  }
+
+  render() {
+    if (!this.el || !this.logEl) return;
+    const nearBottom = this.nearBottom();
+    while (this.logEl.firstChild) this.logEl.removeChild(this.logEl.firstChild);
+
+    this.lines.forEach((l) => {
+      const row = document.createElement('div');
+      row.className = 'think-line think-line-' + l.phase;
+      const dot = document.createElement('span');
+      dot.className = 'think-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      const text = document.createElement('span');
+      text.className = 'think-text';
+      text.textContent = l.text;           // untrusted → textContent only
+      row.appendChild(dot);
+      row.appendChild(text);
+      this.logEl.appendChild(row);
+    });
+
+    const title = this.el.querySelector('.think-title');
+    const step = this.el.querySelector('.think-step');
+    const head = this.el.querySelector('.think-head');
+    if (title) title.textContent = this.finished ? 'Thought' : 'Thinking';
+    if (step) step.textContent = this.step > 0 ? ('step ' + this.step) : '';
+    if (head) {
+      head.setAttribute('aria-expanded', this.open ? 'true' : 'false');
+      head.title = this.finished
+        ? (this.open ? 'Hide reasoning' : 'Reveal reasoning')
+        : 'Agent reasoning (live)';
+    }
+    this.el.classList.toggle('think-collapsed', !this.open);
+    this.el.classList.toggle('think-done', this.finished);
+
+    if (!this.finished && nearBottom) this.scroll();
+  }
+
+  finish(step) {
+    if (!this.el) { this.reset(); return; }
+    if (step) this.step = Math.max(this.step, step);
+    this.finished = true;
+    this.open = false;                        // collapse to the one-liner
+    this.el.classList.remove('think-live');
+    this.render();
+    const head = this.el.querySelector('.think-head');
+    if (head) {
+      const n = this.step || this.lines.length;
+      head.title = 'Thought for ' + n + (n === 1 ? ' step' : ' steps') + ' · expand';
+    }
+  }
+
+  toggle() {
+    if (!this.el) return;
+    this.open = !this.open;
+    this.render();
+  }
+
+  nearBottom() {
+    if (!this.host) return true;
+    const gap = this.host.scrollHeight - this.host.scrollTop - this.host.clientHeight;
+    return gap < 60;
+  }
+
+  scroll() {
+    if (this.host) this.host.scrollTop = this.host.scrollHeight;
+  }
+
+  reset() {
+    this.lines = [];
+    this.step = 0;
+    this.finished = false;
+    this.open = true;
+  }
+
+  destroy() {
+    if (this.el && this.el.parentNode) this.el.parentNode.removeChild(this.el);
+    this.el = null;
+    this.logEl = null;
+    this.reset();
+  }
+}
+
 window.AIAssistant = AIAssistant;
+window.AgentThinkingPanel = AgentThinkingPanel;

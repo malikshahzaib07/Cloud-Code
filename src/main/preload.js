@@ -9,6 +9,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   writeFile: (filePath, content) => ipcRenderer.invoke('fs:writeFile', filePath, content),
   createFile: (filePath) => ipcRenderer.invoke('fs:createFile', filePath),
   createDirectory: (dirPath) => ipcRenderer.invoke('fs:createDirectory', dirPath),
+  watchWorkspace: (rootPath) => ipcRenderer.invoke('fs:watch', rootPath),
+  unwatchWorkspace: () => ipcRenderer.invoke('fs:unwatch'),
+  shellShowItemInFolder: (targetPath) => ipcRenderer.invoke('shell:showItemInFolder', targetPath),
+  onFilesChanged: (callback) => {
+    const listener = (event, payload) => callback(payload);
+    ipcRenderer.on('fs:changed', listener);
+    return () => ipcRenderer.removeListener('fs:changed', listener);
+  },
   deletePath: (targetPath) => ipcRenderer.invoke('fs:deletePath', targetPath),
   renamePath: (oldPath, newPath) => ipcRenderer.invoke('fs:renamePath', oldPath, newPath),
   listFilesRecursive: (rootPath, maxFiles) => ipcRenderer.invoke('fs:listFilesRecursive', rootPath, maxFiles),

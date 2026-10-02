@@ -13,6 +13,24 @@
   var MAX_FILES = 10;
   var MAX_BYTES = 400 * 1024;
 
+  var THINK_LABELS = {
+    off: 'Think: Off',
+    low: 'Think: Low',
+    medium: 'Think: Medium',
+    high: 'Think: High'
+  };
+
+  var THINK_HINTS = {
+    off: 'Answer immediately — no extra reasoning.',
+    low: 'Short, direct reasoning before answering.',
+    medium: 'Brief reasoning before answering (default).',
+    high: 'Careful step-by-step reasoning, edge cases considered.'
+  };
+
+  var CARET_SVG =
+    '<svg class="dd-caret" width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+    '<path d="M8 10.5 3.5 6h9L8 10.5z"/></svg>';
+
   var CLIP_ICON =
     '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
     '<path d="M10.6 4.3 L5.2 9.7 a1.7 1.7 0 0 0 2.4 2.4 l6.1 -6.1 a3 3 0 0 0 -4.2 -4.2 L3.1 8.2 a4.2 4.2 0 0 0 5.9 5.9 l5.3 -5.3"' +
@@ -66,12 +84,252 @@
     if (!this._checkDom()) return;
 
     this._booted = true;
+    this._openDropdown = null;
     this._initMode();
+    // Native <select>s become hidden, aria-hidden *proxies*: their `.value`
+    // stays authoritative (agent.js + ai-assistant.js read it directly),
+    // while the visible control is the custom `dd-*` dropdown below.
+    this._hideProxy(this.el.think);
+    this._hideProxy(this.el.model);
     this._initThink();
     this._initModel();
     this._initAttach();
     this._renderChips();
   }
+
+  // A <select> that still works headlessly: same id, same .value, hidden.
+  ChatControls.prototype._hideProxy = function (sel) {
+    if (!sel) return sel;
+    sel.classList.add('chat-select-proxy');
+    sel.setAttribute('aria-hidden', 'true');
+    sel.setAttribute('tabindex', '-1');
+    // `hidden` keeps it out of the tab order and out of the layout while
+    // leaving `.value` fully functional.
+    sel.hidden = true;
+    // If the author stylesheet wins on display, force it out of flow too.
+    if (sel.style) sel.style.display = 'none';
+    return sel;
+  };
+
+  /* ---------------------------------------------------------------------
+     Dropdown — a VS Code quick-pick style menu (button + popup list).
+     Namespaced `dd-*`. Keyboard: Enter/Space/ArrowUp/ArrowDown open,
+     arrows move, Enter/Space select, Escape closes + restores focus.
+     --------------------------------------------------------------------- */
+  ChatControls.prototype._createDropdown = function (opts) {
+    var self = this;
+    var dd = {
+      key: opts.key,
+      select: opts.select,
+      items: [],
+      value: '',
+      activeIndex: 0,
+      open: false,
+      disabled: false
+    };
+
+    var root = document.createElement('div');
+    root.className = 'dd';
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'dd-trigger';
+    trigger.setAttribute('id', opts.id + '-trigger');
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.setAttribute('role', 'combobox');
+
+    var label = document.createElement('span');
+    label.className = 'dd-value';
+
+    var menu = document.createElement('div');
+    menu.className = 'dd-menu';
+    menu.setAttribute('id', opts.id + '-menu');
+    menu.setAttribute('role', 'listbox');
+    menu.hidden = true;
+
+    trigger.innerHTML = CARET_SVG;
+    trigger.insertBefore(label, trigger.firstChild);
+
+    root.appendChild(trigger);
+    root.appendChild(menu);
+    // Hide the native proxy visually but keep it as the value authority.
+    if (opts.select && opts.select.parentNode) {
+      opts.select.parentNode.insertBefore(root, opts.select);
+    }
+
+    dd.root = root;
+    dd.trigger = trigger;
+    dd.menu = menu;
+    dd.label = label;
+
+    dd.setItems = function (items, selected) {
+      dd.items = items || [];
+      if (selected != null) dd.value = selected;
+      dd.renderMenu();
+      dd.sync();
+    };
+
+    dd.renderMenu = function () {
+      while (menu.firstChild) menu.removeChild(menu.firstChild);
+      var active = false;
+      dd.items.forEach(function (item, i) {
+        var row = document.createElement('div');
+        row.className = 'dd-item';
+        row.setAttribute('role', 'option');
+        row.dataset.index = String(i);
+        var check = document.createElement('span');
+        check.className = 'dd-check';
+        check.setAttribute('aria-hidden', 'true');
+        check.textContent = item.value === dd.value ? '✓' : '';
+        var text = document.createElement('span');
+        text.className = 'dd-item-label';
+        text.textContent = item.label || item.value;   // untrusted → textContent
+        if (item.hint) row.title = item.hint;
+        row.appendChild(check);
+        row.appendChild(text);
+        if (item.value === dd.value) row.setAttribute('aria-selected', 'true');
+        if (!active && item.value === dd.value) {
+          row.classList.add('dd-item-active');
+          active = true;
+        }
+        row.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          dd.close(true);
+          dd.choose(i);
+        });
+        row.addEventListener('mouseenter', function () {
+          dd.setActive(i);
+        });
+        menu.appendChild(row);
+      });
+      dd.setActive(active ? dd.indexOfValue(dd.value) : 0);
+    };
+
+    dd.indexOfValue = function (v) {
+      for (var i = 0; i < dd.items.length; i++) if (dd.items[i].value === v) return i;
+      return 0;
+    };
+
+    dd.setActive = function (i) {
+      if (!dd.items.length) return;
+      dd.activeIndex = Math.max(0, Math.min(dd.items.length - 1, i));
+      var rows = menu.querySelectorAll ? menu.querySelectorAll('.dd-item') : [];
+      for (var k = 0; k < rows.length; k++) rows[k].classList.toggle('dd-item-active', k === dd.activeIndex);
+    };
+
+    dd.sync = function () {
+      label.textContent = dd.display();
+      trigger.classList.toggle('dd-open', dd.open);
+      trigger.classList.toggle('dd-empty', !dd.value);
+      trigger.classList.toggle('dd-disabled', !!dd.disabled);
+      trigger.disabled = !!dd.disabled;
+      trigger.setAttribute('aria-expanded', dd.open ? 'true' : 'false');
+      if (dd.select) {
+        dd.select.value = dd.value;
+      }
+    };
+
+    dd.display = function () {
+      var it = dd.items[dd.indexOfValue(dd.value)];
+      return it ? (it.label || it.value) : (dd.value || opts.placeholder || '—');
+    };
+
+    dd.toggle = function () {
+      if (dd.disabled) return;
+      if (dd.open) dd.close();
+      else dd.show();
+    };
+
+    dd.show = function () {
+      if (dd.disabled || dd.open) return;
+      if (self._openDropdown && self._openDropdown !== dd) self._openDropdown.close();
+      dd.open = true;
+      self._openDropdown = dd;
+      menu.hidden = false;
+      dd.renderMenu();
+      dd.sync();
+    };
+
+    dd.close = function (keepFocus) {
+      if (!dd.open) return;
+      dd.open = false;
+      menu.hidden = true;
+      dd.sync();
+      if (self._openDropdown === dd) self._openDropdown = null;
+      if (keepFocus && trigger.focus) trigger.focus();
+    };
+
+    dd.choose = function (i) {
+      var item = dd.items[i];
+      if (!item) return;
+      if (item.value !== dd.value) {
+        if (opts.onChange) opts.onChange(item.value);
+      } else {
+        dd.sync();
+      }
+    };
+
+    dd.onKeydown = function (e) {
+      var k = e.key;
+      if (k === 'Escape') {
+        e.preventDefault();
+        dd.close(true);
+        return;
+      }
+      if (!dd.open) {
+        if (k === 'Enter' || k === ' ' || k === 'ArrowDown' || k === 'ArrowUp') {
+          e.preventDefault();
+          dd.show();
+          if (k === 'ArrowUp' && dd.items.length) dd.setActive(dd.items.length - 1);
+        }
+        return;
+      }
+      if (k === 'ArrowDown') { e.preventDefault(); dd.setActive(dd.activeIndex + 1); }
+      else if (k === 'ArrowUp') { e.preventDefault(); dd.setActive(dd.activeIndex - 1); }
+      else if (k === 'Home') { e.preventDefault(); dd.setActive(0); }
+      else if (k === 'End') { e.preventDefault(); dd.setActive(dd.items.length - 1); }
+      else if (k === 'Enter' || k === ' ') { e.preventDefault(); dd.close(true); dd.choose(dd.activeIndex); }
+      else if (k === 'Tab') { dd.close(); }
+    };
+
+    trigger.addEventListener('keydown', dd.onKeydown);
+    trigger.addEventListener('click', function () { dd.toggle(); });
+    menu.addEventListener('keydown', function (e) { dd.onKeydown(e); });
+    // Keep focus on the trigger while the popup is open so Escape/Enter work.
+    trigger.addEventListener('blur', function () {
+      if (dd.open && !root.contains) return;
+      if (dd.open && root.contains && root.contains(document.activeElement)) return;
+      if (dd.open) dd.close();
+    });
+
+    dd.destroy = function () {
+      if (root.parentNode) root.parentNode.removeChild(root);
+    };
+
+    return dd;
+  };
+
+  // Dismiss the open dropdown on outside click / scroll / resize.
+  ChatControls.prototype._initGlobalDismiss = function () {
+    var self = this;
+    if (this._dismissWired) return;
+    this._dismissWired = true;
+    global.document.addEventListener('mousedown', function (e) {
+      var dd = self._openDropdown;
+      if (!dd) return;
+      var t = e && e.target;
+      if (t && dd.root.contains && dd.root.contains(t)) return;
+      dd.close();
+    }, true);
+    global.addEventListener('resize', function () {
+      if (self._openDropdown) self._openDropdown.close();
+    });
+    // Scroll (capture) covers the panel resize handle + any scrollable ancestor.
+    global.document.addEventListener('scroll', function () {
+      if (self._openDropdown) self._openDropdown.close();
+    }, true);
+  };
 
   // Returns true when every required element exists; logs once otherwise.
   ChatControls._missingLogged = false;
@@ -139,22 +397,52 @@
 
   ChatControls.prototype._initThink = function () {
     var self = this;
-    // Keep the option list honest even if index.html drifted.
-    if (!this.el.think.options || this.el.think.options.length === 0) {
+    this._initGlobalDismiss();
+
+    var current = this._readThink();
+
+    // Keep the hidden proxy's option list honest even if index.html drifted.
+    var have = this.el.think.options ? this.el.think.options.length : 0;
+    if (!have) {
       THINK_LEVELS.forEach(function (lv) {
         var o = document.createElement('option');
         o.value = lv;
-        o.textContent = 'Think: ' + lv.charAt(0).toUpperCase() + lv.slice(1);
+        o.textContent = THINK_LABELS[lv];
         self.el.think.appendChild(o);
       });
     }
-    this.el.think.value = this._readThink();
+    this.el.think.value = current;
+
+    // The proxy remains functional: an external `change` still routes through
+    // the same normalise → persist → dispatch path.
     this.el.think.addEventListener('change', function () {
-      var lv = self._normalizeThink(self.el.think.value);
-      self.el.think.value = lv;
-      self._writeThink(lv);
-      global.dispatchEvent(new CustomEvent('chat:think-changed', { detail: { level: lv } }));
+      self.setThink(self.el.think.value);
     });
+
+    this.thinkDd = this._createDropdown({
+      key: 'think',
+      id: 'think-level-dd',
+      select: this.el.think,
+      placeholder: THINK_LABELS[DEFAULT_THINK],
+      onChange: function (v) { self.setThink(v); }
+    });
+    this.thinkDd.setItems(THINK_LEVELS.map(function (lv) {
+      return { value: lv, label: THINK_LABELS[lv], hint: THINK_HINTS[lv] };
+    }), current);
+    this.thinkDd.trigger.title = 'Thinking level — controls how much the model reasons before answering';
+  };
+
+  ChatControls.prototype.setThink = function (v) {
+    if (!this._booted) return;
+    var lv = this._normalizeThink(v);
+    if (this.el.think) this.el.think.value = lv;
+    if (this.thinkDd) {
+      this.thinkDd.value = lv;
+      this.thinkDd.renderMenu();
+      this.thinkDd.sync();
+    }
+    this._writeThink(lv);
+    global.dispatchEvent(new CustomEvent('chat:think-changed', { detail: { level: lv } }));
   };
 
   ChatControls.prototype._normalizeThink = function (v) {
@@ -199,9 +487,17 @@
 
   ChatControls.prototype._initModel = function () {
     var self = this;
+    this._initGlobalDismiss();
     this._model = DEFAULT_MODEL;
     this.el.model.addEventListener('change', function () {
       self.setModel(self.el.model.value);
+    });
+    this.modelDd = this._createDropdown({
+      key: 'model',
+      id: 'model-dd',
+      select: this.el.model,
+      placeholder: DEFAULT_MODEL,
+      onChange: function (v) { self.setModel(v); }
     });
     this._loadModel();
   };
@@ -233,21 +529,23 @@
       return;
     }
     if (!p || typeof p.then !== 'function') {
-      if (p) this._setOptions(normalizeModels(p));
+      this._setOptions(normalizeModels(p));
       return;
     }
     p.then(function (list) {
-      // _setOptions prepends the active model itself when it is missing.
+      // _setOptions prepends the active model itself when it is missing, so
+      // the dropdown is never empty.
       self._setOptions(normalizeModels(list));
     }).catch(function (e) {
       console.debug('chat-controls: listAiModels failed', e);
     });
   };
 
-  // Rebuilds the option list, keeping `current` selected even if absent.
+  // Rebuilds both the hidden proxy's options and the visible dropdown,
+  // keeping `current` selected even when the server didn't list it.
+  // Never produces an empty list.
   ChatControls.prototype._setOptions = function (models) {
     var sel = this.el.model;
-    if (!sel) return;
     var current = this._model;
     var list = [];
     (models || []).forEach(function (m) {
@@ -257,14 +555,29 @@
     if (current && list.indexOf(current) === -1) list.unshift(current);
     if (list.length === 0) list = [current || DEFAULT_MODEL];
 
-    sel.textContent = '';
-    list.forEach(function (m) {
-      var o = document.createElement('option');
-      o.value = m;
-      o.textContent = m;
-      sel.appendChild(o);
-    });
-    if (list.indexOf(current) !== -1) sel.value = current;
+    if (sel) {
+      sel.textContent = '';
+      list.forEach(function (m) {
+        var o = document.createElement('option');
+        o.value = m;
+        o.textContent = m;
+        sel.appendChild(o);
+      });
+      sel.value = current;
+    }
+
+    if (this.modelDd) {
+      // A single-item list means the backend list is unavailable: keep the
+      // control usable but visually flag that it is not a real choice.
+      this.modelDd.disabled = false;
+      this.modelDd.trigger.classList.toggle('dd-solo', list.length < 2);
+      this.modelDd.trigger.title = list.length < 2
+        ? 'Model list unavailable — showing the configured model (' + current + ')'
+        : 'AI model used for chat and agent requests';
+      this.modelDd.setItems(list.map(function (m) {
+        return { value: m, label: m, hint: m === current ? 'Currently selected' : '' };
+      }), current);
+    }
   };
 
   ChatControls.prototype.setModel = function (m) {
@@ -285,6 +598,18 @@
         this.el.model.appendChild(o);
       }
       this.el.model.value = m;
+    }
+    if (this.modelDd) {
+      var inList = false;
+      this.modelDd.items.forEach(function (it) { if (it.value === m) inList = true; });
+      if (!inList) {
+        // Not in the list yet — add it rather than showing a stale label.
+        this.modelDd.items = [{ value: m, label: m, hint: 'Currently selected' }]
+          .concat(this.modelDd.items);
+      }
+      this.modelDd.value = m;
+      this.modelDd.renderMenu();
+      this.modelDd.sync();
     }
     try {
       var api = global.electronAPI;

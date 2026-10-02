@@ -76,22 +76,12 @@ class TerminalManager {
     setTimeout(fn, 100);
   }
 
-  // --------------------------------------------------------------------------
-  // Build the xterm instance and connect it to the PTY
-  // --------------------------------------------------------------------------
-  create(TerminalCtor, FitCtor) {
-    if (this.term || !this.container) return;
-
-    this.term = new TerminalCtor({
-      cursorBlink: true,
-      cursorStyle: 'bar',
-      fontFamily: 'Consolas, "Cascadia Mono", "Courier New", monospace',
-      fontSize: 13,
-      lineHeight: 1.2,
-      scrollback: 10000,
-      allowProposedApi: true,
-      convertEol: false,
-      theme: {
+  /** xterm palette that follows the app theme (light is the default). */
+  xtermTheme() {
+    const dom = (document.documentElement && document.documentElement.dataset &&
+      document.documentElement.dataset.theme) || 'light';
+    if (dom === 'dark') {
+      return {
         background: '#181818',
         foreground: '#cccccc',
         cursor: '#ffffff',
@@ -112,7 +102,58 @@ class TerminalManager {
         brightMagenta: '#d670d6',
         brightCyan: '#29b8db',
         brightWhite: '#e5e5e5'
-      }
+      };
+    }
+    return {
+      background: '#ffffff',
+      foreground: '#1f1f1f',
+      cursor: '#000000',
+      selectionBackground: 'rgba(0, 122, 204, 0.25)',
+      black: '#000000',
+      red: '#cd3131',
+      green: '#078b21',
+      yellow: '#949800',
+      blue: '#0451a5',
+      magenta: '#bc05bc',
+      cyan: '#0598bc',
+      white: '#555555',
+      brightBlack: '#666666',
+      brightRed: '#cd3131',
+      brightGreen: '#14ce14',
+      brightYellow: '#b5ba00',
+      brightBlue: '#0451a5',
+      brightMagenta: '#bc05bc',
+      brightCyan: '#0598bc',
+      brightWhite: '#666666'
+    };
+  }
+
+  /** Re-colour the terminal when the app theme changes. */
+  applyTheme() {
+    if (!this.term) return;
+    try {
+      this.term.options.theme = this.xtermTheme();
+    } catch (e) {
+      // older xterm: ignore
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Build the xterm instance and connect it to the PTY
+  // --------------------------------------------------------------------------
+  create(TerminalCtor, FitCtor) {
+    if (this.term || !this.container) return;
+
+    this.term = new TerminalCtor({
+      cursorBlink: true,
+      cursorStyle: 'bar',
+      fontFamily: 'Consolas, "Cascadia Mono", "Courier New", monospace',
+      fontSize: 13,
+      lineHeight: 1.2,
+      scrollback: 10000,
+      allowProposedApi: true,
+      convertEol: false,
+      theme: this.xtermTheme()
     });
 
     if (FitCtor) {
@@ -171,6 +212,7 @@ class TerminalManager {
       }
     }
     window.addEventListener('resize', () => this.fit());
+    window.addEventListener('theme-changed', () => this.applyTheme());
   }
 
   // --------------------------------------------------------------------------

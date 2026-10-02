@@ -1,0 +1,859 @@
+/* ============================================================================
+   theme-light.css — Light theme for Cloud Code
+   ----------------------------------------------------------------------------
+   Loaded LAST (after vscode.css and every other stylesheet) so it wins.
+
+   Everything is scoped to `html[data-theme="light"]` (specificity 0,2,1 for the
+   descendant selectors, which beats the plain single-class rules it overrides).
+   A matching `html[data-theme="dark"]` block re-declares the original dark
+   custom properties so switching back is byte-for-byte identical to the
+   pre-theme behaviour.
+
+   Monaco paints its own background; only the DOM chrome around it is handled
+   here (see #monaco-host / .diff-pane / .ie-* widgets).
+   ========================================================================== */
+
+/* ============================================================================
+   1. Design tokens
+   ========================================================================== */
+
+/* ---------- 1a. LIGHT ---------- */
+html[data-theme="light"] {
+  /* Surfaces — slightly warmer / more modern than stock VS Code Light */
+  --bg-editor: #ffffff;
+  --bg-sidebar: #f3f3f3;
+  --bg-activity: #ececec;
+  --bg-activity-active: #ffffff;
+  --bg-titlebar: #f3f3f3;
+  --bg-tabs: #f3f3f3;
+  --bg-tab-inactive: #ececec;
+  --bg-tab-active: #ffffff;
+  --bg-statusbar: #0a66c2;
+  --bg-panel: #fafafa;
+  --bg-input: #ffffff;
+
+  /* Lines */
+  --border-color: #d4d4d4;
+  --border-subtle: #e5e5e5;
+
+  /* Text — all AA on the surfaces above */
+  --text-primary: #1f1f1f;    /* 15.9:1 on white  */
+  --text-secondary: #616161;  /* 6.0:1  on white  */
+  --text-muted: #767676;      /* 4.5:1  on white  */
+  --text-active: #1f1f1f;
+
+  /* Accent */
+  --accent-color: #0a66c2;    /* 5.2:1 with white text */
+  --accent-hover: #0d70c9;
+
+  /* Lists */
+  --badge-bg: #e8e8e8;
+  --list-hover: #e8e8e8;
+  --list-active: #cfe6ff;
+  --list-focus: #cfe6ff;
+
+  /* Scrollbars */
+  --scrollbar-thumb: rgba(100, 100, 100, 0.35);
+  --scrollbar-thumb-hover: rgba(60, 60, 60, 0.55);
+
+  /* Semantic helpers consumed by the overrides below */
+  --cc-success: #2e7d32;
+  --cc-danger: #c62d25;
+  --cc-warning: #9a6b00;
+  --cc-info: #0b6bb5;
+  --cc-teal: #0f766e;
+  --cc-purple: #7a3e9d;
+  --cc-hover-overlay: rgba(0, 0, 0, 0.06);
+  --cc-overlay-scrim: rgba(0, 0, 0, 0.28);
+  --cc-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  --cc-shadow-strong: 0 12px 40px rgba(0, 0, 0, 0.26);
+  --cc-code-bg: #f8f8f8;
+  --cc-control-bg: #ffffff;
+  --cc-control-hover: #ededed;
+
+  color-scheme: light;
+}
+
+/* ---------- 1b. DARK (explicit restore of the original palette) ---------- */
+html[data-theme="dark"] {
+  --bg-editor: #1e1e1e;
+  --bg-sidebar: #252526;
+  --bg-activity: #333333;
+  --bg-activity-active: #252526;
+  --bg-titlebar: #181818;
+  --bg-tabs: #252526;
+  --bg-tab-inactive: #2d2d2d;
+  --bg-tab-active: #1e1e1e;
+  --bg-statusbar: #007acc;
+  --bg-panel: #1e1e1e;
+  --bg-input: #3c3c3c;
+  --border-color: #3e3e42;
+  --border-subtle: #2b2b2b;
+  --text-primary: #cccccc;
+  --text-secondary: #969696;
+  --text-muted: #6e6e6e;
+  --text-active: #ffffff;
+  --accent-color: #007acc;
+  --accent-hover: #0098ff;
+  --badge-bg: #4d4d4d;
+  --list-hover: #2a2d2e;
+  --list-active: #094771;
+  --list-focus: #0e639c;
+  --scrollbar-thumb: rgba(121, 121, 121, 0.4);
+  --scrollbar-thumb-hover: rgba(100, 100, 100, 0.7);
+
+  color-scheme: dark;
+}
+
+/* ============================================================================
+   2. Native form controls, selection, scrollbars
+   ========================================================================== */
+
+html[data-theme="light"] ::selection {
+  background: #b5d5ff;
+  color: #1f1f1f;
+}
+
+html[data-theme="dark"] ::selection {
+  background: #264f78;
+  color: #ffffff;
+}
+
+html[data-theme="light"] input,
+html[data-theme="light"] textarea,
+html[data-theme="light"] select,
+html[data-theme="light"] button {
+  color-scheme: light;
+}
+
+html[data-theme="light"] input::placeholder,
+html[data-theme="light"] textarea::placeholder {
+  color: #757575;            /* 4.6:1 on white — AA for placeholder text */
+  opacity: 1;
+}
+
+/* Bare (unstyled-by-app) native inputs */
+html[data-theme="light"] input[type="text"],
+html[data-theme="light"] input[type="search"],
+html[data-theme="light"] input[type="password"],
+html[data-theme="light"] input[type="number"],
+html[data-theme="light"] textarea {
+  background-color: #ffffff;
+  color: #1f1f1f;
+  border: 1px solid #cecece;
+}
+
+html[data-theme="light"] select {
+  background-color: #ffffff;
+  color: #1f1f1f;
+  border: 1px solid #cecece;
+}
+
+html[data-theme="light"] option {
+  background-color: #ffffff;
+  color: #1f1f1f;
+}
+
+html[data-theme="light"] option:checked {
+  background-color: var(--accent-color);
+  color: #ffffff;
+}
+
+html[data-theme="light"] input[type="checkbox"],
+html[data-theme="light"] input[type="radio"] {
+  accent-color: var(--accent-color);
+}
+
+html[data-theme="light"] hr {
+  border-color: #e5e5e5;
+}
+
+html[data-theme="light"] mark {
+  background: rgba(255, 213, 0, 0.55);
+  color: #1f1f1f;
+}
+
+/* Scrollbars follow the OS scheme in light mode */
+html[data-theme="light"] ::-webkit-scrollbar {
+  background: transparent;
+}
+html[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+html[data-theme="light"] ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ============================================================================
+   3. vscode.css — shell chrome
+   ========================================================================== */
+
+html[data-theme="light"] #titlebar .app-logo { color: #3b3b3b; }
+
+html[data-theme="light"] .activity-icon { color: #616161; }
+html[data-theme="light"] .activity-icon:hover { color: #1f1f1f; }
+html[data-theme="light"] .activity-icon.active { color: #1f1f1f; }
+html[data-theme="light"] .activity-icon.active::before { background-color: var(--accent-color); }
+
+html[data-theme="light"] .nav-btn:hover {
+  background: var(--cc-hover-overlay);
+  color: #1f1f1f;
+}
+html[data-theme="light"] .nav-btn.active {
+  background: rgba(0, 0, 0, 0.05);
+  color: #1f1f1f;
+}
+
+html[data-theme="light"] .icon-btn:hover {
+  background-color: var(--cc-hover-overlay);
+  color: #1f1f1f;
+}
+
+/* ---------- in-app dialog ---------- */
+html[data-theme="light"] .cc-dialog-overlay { background: var(--cc-overlay-scrim); }
+html[data-theme="light"] .cc-dialog {
+  background: #ffffff;
+  border-color: #cecece;
+  box-shadow: var(--cc-shadow-strong);
+}
+html[data-theme="light"] .cc-dialog-input {
+  background: #ffffff;
+  border-color: #cecece;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .cc-dialog-input:focus { border-color: var(--accent-color); }
+html[data-theme="light"] .cc-dialog-hint { color: #6b6b6b; }
+html[data-theme="light"] .cc-dialog-btn {
+  background: #f0f0f0;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .cc-dialog-btn:hover { background: #e4e4e4; }
+html[data-theme="light"] .cc-dialog-btn.primary { background: var(--accent-color); color: #ffffff; }
+html[data-theme="light"] .cc-dialog-btn.primary:hover { background: var(--accent-hover); }
+
+/* ---------- empty state ---------- */
+html[data-theme="light"] .empty-subtitle { color: #6b6b6b; }
+html[data-theme="light"] .empty-open-btn {
+  color: #ffffff;
+  background-color: var(--accent-color);
+}
+html[data-theme="light"] .empty-open-btn:hover { background-color: var(--accent-hover); }
+html[data-theme="light"] #empty-state { color: #8a8a8a; }
+html[data-theme="light"] #empty-state kbd {
+  background: #f0f0f0;
+  border-color: #d4d4d4;
+  color: #5a5a5a;
+}
+
+/* ---------- explorer tree ---------- */
+html[data-theme="light"] .tree-node.active { color: #1f1f1f; }
+html[data-theme="light"] .tree-node .node-label { color: var(--text-primary); }
+html[data-theme="light"] .tree-node .node-arrow { color: #6b6b6b; }
+html[data-theme="light"] .tree-node.active .node-arrow { color: #3f3f3f; }
+
+/* ---------- tabs ---------- */
+html[data-theme="light"] .tab:hover {
+  background-color: #f7f7f7;
+  color: var(--text-primary);
+}
+html[data-theme="light"] .tab .tab-close:hover {
+  background-color: rgba(0, 0, 0, 0.10);
+  color: #1f1f1f;
+}
+html[data-theme="light"] .tab.dirty .tab-close::after { color: #1f1f1f; }
+
+/* ---------- bottom panel / terminal ---------- */
+html[data-theme="light"] .panel-tab.active { color: #1f1f1f; }
+html[data-theme="light"] #terminal-view { background-color: #ffffff; }
+html[data-theme="light"] #bottom-panel { background-color: var(--bg-panel); }
+
+/* ---------- agent panel header ---------- */
+html[data-theme="light"] .ai-header-controls { background-color: #f7f7f7; }
+html[data-theme="light"] .badge {
+  background: rgba(34, 197, 94, 0.14);
+  color: #15803d;
+}
+html[data-theme="light"] .badge-dot { background-color: #16a34a; }
+html[data-theme="light"] .model-select { background: var(--bg-input); color: var(--text-primary); }
+
+/* ---------- chat bubbles / code ---------- */
+html[data-theme="light"] .chat-msg.user {
+  background-color: #eaf2fb;
+  border-color: #c9ddf2;
+}
+html[data-theme="light"] .chat-msg.assistant {
+  background-color: #ffffff;
+  border-color: #e2e2e2;
+}
+html[data-theme="light"] .chat-msg pre {
+  background-color: var(--cc-code-bg);
+  border-color: #e0e0e0;
+}
+html[data-theme="light"] .chat-msg .code-header {
+  background: #f1f1f1;
+  border-bottom-color: #e0e0e0;
+  color: #5a5a5a;
+}
+html[data-theme="light"] .btn-code-action {
+  background: #ffffff;
+  border-color: #c9c9c9;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .btn-code-action:hover { background: #eeeeee; }
+
+/* ---------- chat footer ---------- */
+html[data-theme="light"] .chat-footer { background: #f7f7f7; }
+html[data-theme="light"] .quick-prompt-btn {
+  background: #ffffff;
+  border-color: #d4d4d4;
+  color: #3b3b3b;
+}
+html[data-theme="light"] .quick-prompt-btn:hover {
+  background: #e8e8e8;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .input-box-wrapper {
+  background: var(--bg-input);
+  border-color: var(--border-color);
+}
+
+/* ---------- status bar (accent-filled; hover stays a light scrim) ---------- */
+html[data-theme="light"] #statusbar { color: #ffffff; background-color: var(--bg-statusbar); }
+html[data-theme="light"] .statusbar-item:hover { background-color: rgba(255, 255, 255, 0.22); }
+
+/* ============================================================================
+   4. agentic.css — agent loop, tool cards, diff review, @mentions
+   ========================================================================== */
+
+html[data-theme="light"] .mode-toggle .mode-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #1f1f1f;
+}
+html[data-theme="light"] .mode-toggle .mode-btn.active {
+  background: var(--accent-color);
+  color: #ffffff;
+}
+
+html[data-theme="light"] .agent-run-bar { background: rgba(10, 102, 194, 0.07); }
+html[data-theme="light"] .agent-mode-select {
+  background: #ffffff;
+  color: #1f1f1f;
+  border-color: #cecece;
+}
+html[data-theme="light"] .agent-mini-btn {
+  background: #f0f0f0;
+  border-color: #c9c9c9;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .agent-mini-btn:hover { background: #e4e4e4; }
+html[data-theme="light"] .agent-mini-btn.danger { background: var(--cc-danger); border-color: var(--cc-danger); color: #ffffff; }
+html[data-theme="light"] .agent-mini-btn.danger:hover { background: #a8241d; }
+
+html[data-theme="light"] .agent-notice {
+  border-top-color: rgba(0, 0, 0, 0.10);
+  border-bottom-color: rgba(0, 0, 0, 0.10);
+  color: #616161;
+}
+html[data-theme="light"] .agent-notice strong { color: #1f1f1f; }
+html[data-theme="light"] .agent-thinking-msg .msg-body { color: #616161; }
+html[data-theme="light"] .agent-spinner { border-color: rgba(0, 0, 0, 0.15); }
+html[data-theme="light"] .agent-welcome .msg-body { color: #4a4a4a; }
+html[data-theme="light"] .agent-welcome b { color: var(--cc-teal); }
+
+/* ---------- tool cards ---------- */
+html[data-theme="light"] .tool-card {
+  background: #f7f7f7;
+  border-color: #d4d4d4;
+  border-left-color: #9e9e9e;
+}
+html[data-theme="light"] .tool-card[data-state="awaiting"] {
+  border-left-color: #b07d12;
+  background: rgba(229, 192, 123, 0.14);
+}
+html[data-theme="light"] .tool-card[data-state="done"] { border-left-color: var(--cc-success); }
+html[data-theme="light"] .tool-card[data-state="error"],
+html[data-theme="light"] .tool-card[data-state="rejected"] { border-left-color: var(--cc-danger); }
+
+html[data-theme="light"] .tool-name { color: #1f1f1f; }
+html[data-theme="light"] .tool-target { color: #5f5f5f; }
+html[data-theme="light"] .tool-badge {
+  color: #5f5f5f;
+  background: #ffffff;
+  border-color: #cecece;
+}
+html[data-theme="light"] .tool-card[data-state="done"] .tool-badge {
+  color: var(--cc-success);
+  border-color: rgba(46, 125, 50, 0.4);
+}
+html[data-theme="light"] .tool-card[data-state="error"] .tool-badge,
+html[data-theme="light"] .tool-card[data-state="rejected"] .tool-badge {
+  color: var(--cc-danger);
+  border-color: rgba(198, 45, 37, 0.4);
+}
+html[data-theme="light"] .tool-card[data-state="awaiting"] .tool-badge {
+  color: #8a6100;
+  border-color: rgba(176, 125, 18, 0.5);
+}
+
+html[data-theme="light"] .tool-output {
+  background: #ffffff;
+  border-color: #dcdcdc;
+  color: #4a4a4a;
+}
+html[data-theme="light"] .tool-act-btn {
+  background: #ffffff;
+  border-color: #c9c9c9;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .tool-act-btn:hover { background: var(--cc-control-hover); }
+html[data-theme="light"] .tool-act-btn.approve {
+  background: var(--cc-success);
+  border-color: var(--cc-success);
+  color: #ffffff;
+}
+html[data-theme="light"] .tool-act-btn.approve:hover { background: #388e3c; }
+html[data-theme="light"] .tool-act-btn.reject:hover {
+  background: rgba(198, 45, 37, 0.12);
+  border-color: var(--cc-danger);
+  color: var(--cc-danger);
+}
+html[data-theme="light"] .tool-act-btn.allow { color: #5f5f5f; }
+html[data-theme="light"] .tool-act-btn.allow:hover { color: #1f1f1f; border-color: #5f5f5f; }
+
+/* ---------- diff review ---------- */
+html[data-theme="light"] .diff-toolbar { background: #f3f3f3; }
+html[data-theme="light"] .diff-title { color: #1f1f1f; }
+html[data-theme="light"] .diff-stats .diff-add { color: var(--cc-success); }
+html[data-theme="light"] .diff-stats .diff-del { color: var(--cc-danger); }
+html[data-theme="light"] .diff-btn {
+  background: #ffffff;
+  border-color: #c9c9c9;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .diff-btn:hover { background: var(--cc-control-hover); }
+html[data-theme="light"] .diff-btn.accept {
+  background: var(--cc-success);
+  border-color: var(--cc-success);
+  color: #ffffff;
+}
+html[data-theme="light"] .diff-btn.accept:hover { background: #388e3c; }
+html[data-theme="light"] .diff-btn.revert:hover {
+  background: rgba(198, 45, 37, 0.12);
+  border-color: var(--cc-danger);
+  color: var(--cc-danger);
+}
+html[data-theme="light"] .tab .tab-icon.diff-glyph { color: #9a6b00; }
+
+/* ---------- @mention popup ---------- */
+html[data-theme="light"] .mention-popup {
+  background: #ffffff;
+  border-color: #cecece;
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.18);
+}
+html[data-theme="light"] .mention-item { color: #1f1f1f; }
+html[data-theme="light"] .mention-item:hover { background: #f0f0f0; }
+html[data-theme="light"] .mention-item.active { background: var(--accent-color); color: #ffffff; }
+html[data-theme="light"] .mention-item.active .mi-dir { color: rgba(255, 255, 255, 0.85); }
+html[data-theme="light"] .mention-item .mi-dir { color: #5f5f5f; }
+
+/* ---------- changes popup ---------- */
+html[data-theme="light"] #statusbar-changes { color: #ffe08a; }
+html[data-theme="light"] #statusbar-changes:hover { background: rgba(255, 255, 255, 0.14); }
+html[data-theme="light"] .changes-popup {
+  background: #ffffff;
+  border-color: #cecece;
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.2);
+}
+html[data-theme="light"] .changes-head {
+  color: #1f1f1f;
+  border-bottom-color: #d4d4d4;
+}
+html[data-theme="light"] .changes-empty { color: #5f5f5f; }
+html[data-theme="light"] .change-row:hover { background: #f0f0f0; }
+html[data-theme="light"] .change-name { color: #1f1f1f; }
+html[data-theme="light"] .change-dir { color: #5f5f5f; }
+html[data-theme="light"] .change-btn {
+  border-color: #c9c9c9;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .change-btn:hover {
+  background: var(--cc-control-hover);
+  border-color: var(--accent-color);
+}
+
+/* ============================================================================
+   5. palette.css — command palette / quick open
+   ========================================================================== */
+
+html[data-theme="light"] .palette-overlay { background: rgba(0, 0, 0, 0.22); }
+html[data-theme="light"] .palette-panel {
+  background: #ffffff;
+  border-color: #cecece;
+  box-shadow: var(--cc-shadow);
+}
+html[data-theme="light"] .palette-input {
+  color: #1f1f1f;
+  border-bottom-color: #d4d4d4;
+  caret-color: #1f1f1f;
+}
+html[data-theme="light"] .palette-input::placeholder { color: #757575; }
+html[data-theme="light"] .palette-results::-webkit-scrollbar-thumb { background: #c1c1c1; }
+html[data-theme="light"] .palette-results::-webkit-scrollbar-thumb:hover { background: #a0a0a0; }
+html[data-theme="light"] .palette-item { color: #1f1f1f; }
+html[data-theme="light"] .palette-item:hover { background: #f3f3f3; }
+html[data-theme="light"] .palette-item.active { background: var(--accent-color); color: #ffffff; }
+html[data-theme="light"] .palette-item .hl { color: #1f1f1f; font-weight: 600; }
+html[data-theme="light"] .palette-item.active .hl { color: #ffffff; }
+html[data-theme="light"] .palette-item.active .palette-item-cat,
+html[data-theme="light"] .palette-item.active .palette-file-dir { color: rgba(255, 255, 255, 0.85); }
+html[data-theme="light"] .palette-item-cat,
+html[data-theme="light"] .palette-file-dir { color: #5f5f5f; }
+html[data-theme="light"] .palette-item-key {
+  color: #5f5f5f;
+  border-color: #c9c9c9;
+}
+html[data-theme="light"] .palette-item.active .palette-item-key {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.6);
+}
+html[data-theme="light"] .palette-empty,
+html[data-theme="light"] .palette-loading { color: #5f5f5f; }
+html[data-theme="light"] .palette-footer {
+  border-top-color: #d4d4d4;
+  color: #5f5f5f;
+}
+html[data-theme="light"] .palette-footer kbd {
+  background: #f0f0f0;
+  border-color: #d4d4d4;
+}
+
+/* ============================================================================
+   6. inline-edit.css — inline edit / Ctrl+K widgets
+   ========================================================================== */
+
+html[data-theme="light"] .inline-edit-widget,
+html[data-theme="light"] .inline-diff-bar {
+  background: #ffffff;
+  border-color: var(--accent-color);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+html[data-theme="light"] .ie-spark { color: var(--accent-color); }
+html[data-theme="light"] .ie-input { color: #1f1f1f; }
+html[data-theme="light"] .ie-input::placeholder { color: #757575; }
+html[data-theme="light"] .ie-input:disabled { color: #8c8c8c; }
+html[data-theme="light"] .ie-key-hint {
+  color: #5f5f5f;
+  border-color: #c9c9c9;
+}
+html[data-theme="light"] .ie-status { color: #5f5f5f; }
+html[data-theme="light"] .ie-status.error { color: var(--cc-danger); }
+html[data-theme="light"] .ie-add { color: var(--cc-success); }
+html[data-theme="light"] .ie-del { color: var(--cc-danger); }
+html[data-theme="light"] .ie-btn {
+  background: #f0f0f0;
+  border-color: #c9c9c9;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .ie-btn:hover { background: #e4e4e4; }
+html[data-theme="light"] .ie-accept {
+  background: var(--cc-success);
+  border-color: var(--cc-success);
+  color: #ffffff;
+}
+html[data-theme="light"] .ie-accept:hover { background: #388e3c; }
+html[data-theme="light"] .ie-status-inline { color: #5f5f5f; }
+html[data-theme="light"] .ie-line-added { background: rgba(46, 160, 67, 0.20) !important; }
+html[data-theme="light"] .ie-removed-pop {
+  background: #ffffff;
+  border-color: #cecece;
+}
+html[data-theme="light"] .ie-removed-line {
+  color: var(--cc-danger);
+  background: rgba(198, 45, 37, 0.10);
+}
+
+/* ============================================================================
+   7. autocomplete.css — ghost text
+   ========================================================================== */
+
+html[data-theme="light"] .ghost-text { color: rgba(95, 95, 95, 0.55); }
+
+/* ============================================================================
+   8. search.css — workspace search sidebar
+   ========================================================================== */
+
+html[data-theme="light"] .search-row input {
+  background: #ffffff;
+  color: #1f1f1f;
+  border-color: #cecece;
+}
+html[data-theme="light"] .search-row input:focus { border-color: var(--accent-color); }
+html[data-theme="light"] .search-row input::placeholder { color: #757575; }
+html[data-theme="light"] .search-count { color: #5f5f5f; }
+html[data-theme="light"] .search-file { color: #1f1f1f; }
+html[data-theme="light"] .search-file:hover { background: #f0f0f0; }
+html[data-theme="light"] .sf-arrow { color: #6b6b6b; }
+html[data-theme="light"] .sf-dir { color: #5f5f5f; }
+html[data-theme="light"] .sf-count { color: #5f5f5f; }
+html[data-theme="light"] .search-match { color: #3f3f3f; }
+html[data-theme="light"] .search-match:hover {
+  background: #f0f0f0;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .sm-line { color: #757575; }
+html[data-theme="light"] .search-empty { color: #5f5f5f; }
+html[data-theme="light"] .search-empty.error { color: var(--cc-danger); }
+
+/* ============================================================================
+   9. settings.css — settings modal
+   ========================================================================== */
+
+html[data-theme="light"] .settings-overlay { background: rgba(0, 0, 0, 0.32); }
+html[data-theme="light"] .settings-panel {
+  background: #ffffff;
+  border-color: #cecece;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.24);
+}
+html[data-theme="light"] .settings-title { color: #1f1f1f; }
+html[data-theme="light"] .settings-close { color: #616161; }
+html[data-theme="light"] .settings-close:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: #1f1f1f;
+}
+html[data-theme="light"] .settings-tabs { border-bottom-color: #d4d4d4; }
+html[data-theme="light"] .settings-tab { color: #616161; }
+html[data-theme="light"] .settings-tab:hover { color: #1f1f1f; }
+html[data-theme="light"] .settings-tab.active {
+  border-bottom-color: var(--accent-color);
+  color: #1f1f1f;
+}
+html[data-theme="light"] .settings-page label { color: #1f1f1f; }
+html[data-theme="light"] .settings-page input[type="text"],
+html[data-theme="light"] .settings-page input[type="password"],
+html[data-theme="light"] .settings-page input[type="number"] {
+  background: #ffffff;
+  border-color: #cecece;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .settings-page input[type="text"]:focus,
+html[data-theme="light"] .settings-page input[type="password"]:focus,
+html[data-theme="light"] .settings-page input[type="number"]:focus {
+  border-color: var(--accent-color);
+}
+html[data-theme="light"] .check-label input[type="checkbox"] { accent-color: var(--accent-color); }
+html[data-theme="light"] .settings-note { color: #6b6b6b; }
+
+html[data-theme="light"] .mode-card {
+  background: #ffffff;
+  border-color: #cecece;
+}
+html[data-theme="light"] .mode-card:hover { background: #f4f4f4; }
+html[data-theme="light"] .mode-card.selected {
+  border-color: var(--accent-color);
+  background: rgba(10, 102, 194, 0.08);
+}
+html[data-theme="light"] .mode-card .mode-title { color: #1f1f1f; }
+html[data-theme="light"] .mode-card .mode-desc { color: #5f5f5f; }
+html[data-theme="light"] .mode-card.selected .mode-desc { color: #3f3f3f; }
+
+html[data-theme="light"] .about-text { color: #1f1f1f; }
+html[data-theme="light"] .shortcuts-table td {
+  color: #1f1f1f;
+  border-bottom-color: #e5e5e5;
+}
+html[data-theme="light"] .shortcuts-table kbd {
+  background: #f0f0f0;
+  border-color: #c9c9c9;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .settings-foot {
+  border-top-color: #d4d4d4;
+  background: #fafafa;
+}
+html[data-theme="light"] .settings-msg { color: #1f1f1f; }
+html[data-theme="light"] .settings-msg.success { color: var(--cc-success); }
+html[data-theme="light"] .settings-msg.error { color: var(--cc-danger); }
+html[data-theme="light"] .settings-btn.primary {
+  background: var(--accent-color);
+  color: #ffffff;
+}
+html[data-theme="light"] .settings-btn.primary:hover { background: var(--accent-hover); }
+html[data-theme="light"] .settings-btn.ghost {
+  background: transparent;
+  border-color: #cecece;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .settings-btn.ghost:hover {
+  background: #f0f0f0;
+  border-color: #c9c9c9;
+}
+
+/* ============================================================================
+   10. chat.css — markdown message rendering
+   ========================================================================== */
+
+html[data-theme="light"] .chat-msg:hover { background-color: rgba(0, 0, 0, 0.03); }
+html[data-theme="light"] .chat-msg.user {
+  background-color: #eaf2fb;
+  border-color: #c9ddf2;
+}
+html[data-theme="light"] .chat-msg.assistant {
+  background-color: #ffffff;
+  border-color: #e2e2e2;
+}
+html[data-theme="light"] .chat-msg.msg-error {
+  background-color: rgba(198, 45, 37, 0.06);
+  border-color: rgba(198, 45, 37, 0.30);
+  border-left-color: var(--cc-danger);
+}
+html[data-theme="light"] .msg-error-row { color: #c62828; }
+
+html[data-theme="light"] .msg-avatar { background: rgba(0, 0, 0, 0.05); }
+html[data-theme="light"] .msg-avatar-ai { background: rgba(10, 102, 194, 0.12); border-color: rgba(10, 102, 194, 0.4); }
+html[data-theme="light"] .msg-act:hover {
+  background: #ececec;
+  border-color: #c9c9c9;
+}
+html[data-theme="light"] .msg-act.msg-flash-ok { color: var(--cc-success); }
+html[data-theme="light"] .msg-symbol-info { color: var(--cc-info); }
+html[data-theme="light"] .msg-symbol-warn { color: var(--cc-warning); }
+html[data-theme="light"] .msg-symbol-error { color: var(--cc-danger); }
+html[data-theme="light"] .chat-msg.msg-notice-error { border-color: rgba(198, 45, 37, 0.4); color: #b3261e; }
+
+html[data-theme="light"] .chat-msg .msg-body.msg-muted { color: #6b6b6b; }
+html[data-theme="light"] .msg-h4 { color: #2b2b2b; }
+html[data-theme="light"] .msg-body strong,
+html[data-theme="light"] .msg-body b { color: #1f1f1f; }
+html[data-theme="light"] .msg-body del { color: #767676; }
+html[data-theme="light"] .msg-link {
+  color: #0a66c2;
+  border-bottom-color: rgba(10, 102, 194, 0.4);
+}
+html[data-theme="light"] .msg-link:hover { color: #084e93; border-bottom-color: #084e93; }
+
+html[data-theme="light"] .msg-inline-code {
+  background: #f2f2f2;
+  border-color: #e0e0e0;
+  color: #6f42c1;
+}
+
+/* ---------- tables ---------- */
+html[data-theme="light"] .msg-tablewrap {
+  background: #ffffff;
+  border-color: #e5e5e5;
+}
+html[data-theme="light"] .msg-table th,
+html[data-theme="light"] .msg-table td { border-color: #e5e5e5; }
+html[data-theme="light"] .msg-table th { background: #f3f3f3; color: #1f1f1f; }
+html[data-theme="light"] .msg-table td { color: #1f1f1f; }
+html[data-theme="light"] .msg-table tbody tr:nth-child(even) td { background: rgba(0, 0, 0, 0.03); }
+
+/* ---------- code blocks ---------- */
+html[data-theme="light"] .msg-code,
+html[data-theme="light"] .chat-msg .code-block-container {
+  background: var(--cc-code-bg);
+  border-color: #dcdcdc;
+}
+html[data-theme="light"] .msg-code-head,
+html[data-theme="light"] .chat-msg .code-block-container .code-header {
+  background: #eef0f2;
+  border-bottom-color: #dcdcdc;
+  color: #5f5f5f;
+}
+html[data-theme="light"] .msg-code-lang { color: var(--cc-info); }
+html[data-theme="light"] .msg-code-btn {
+  background: #ffffff;
+  border-color: #c9c9c9;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .msg-code-btn:hover { background: #e4e4e4; }
+html[data-theme="light"] .msg-code-copy.msg-flash-ok {
+  color: var(--cc-success);
+  border-color: rgba(46, 125, 50, 0.45);
+}
+html[data-theme="light"] .msg-code-pre,
+html[data-theme="light"] .chat-msg .code-block-container pre {
+  background: var(--cc-code-bg);
+}
+html[data-theme="light"] .msg-code-body { color: #1f1f1f; }
+
+html[data-theme="light"] .msg-code[data-lang="js"] .msg-code-lang,
+html[data-theme="light"] .msg-code[data-lang="javascript"] .msg-code-lang,
+html[data-theme="light"] .msg-code[data-lang="ts"] .msg-code-lang,
+html[data-theme="light"] .msg-code[data-lang="typescript"] .msg-code-lang { color: #9a6b00; }
+html[data-theme="light"] .msg-code[data-lang="json"] .msg-code-lang { color: var(--cc-purple); }
+html[data-theme="light"] .msg-code[data-lang="html"] .msg-code-lang,
+html[data-theme="light"] .msg-code[data-lang="css"] .msg-code-lang { color: var(--cc-teal); }
+html[data-theme="light"] .msg-code[data-lang="sh"] .msg-code-lang,
+html[data-theme="light"] .msg-code[data-lang="bash"] .msg-code-lang,
+html[data-theme="light"] .msg-code[data-lang="shell"] .msg-code-lang,
+html[data-theme="light"] .msg-code[data-lang="powershell"] .msg-code-lang,
+html[data-theme="light"] .msg-code[data-lang="python"] .msg-code-lang,
+html[data-theme="light"] .msg-code[data-lang="py"] .msg-code-lang { color: var(--cc-info); }
+
+html[data-theme="light"] .msg-spinner { border-color: rgba(0, 0, 0, 0.15); }
+
+/* ============================================================================
+   11. chat-controls.css — control bar, selects, attach chips
+   ========================================================================== */
+
+html[data-theme="light"] .chat-control-bar {
+  background: var(--bg-sidebar);
+  border-top-color: var(--border-subtle);
+}
+html[data-theme="light"] .chat-ctl-select {
+  background-color: var(--bg-input);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+html[data-theme="light"] .chat-ctl-select:hover {
+  background-color: var(--bg-activity);
+  border-color: var(--accent-color);
+}
+html[data-theme="light"] .chat-ctl-select option {
+  background-color: #ffffff;
+  color: #1f1f1f;
+}
+html[data-theme="light"] .chat-ctl-select option:checked {
+  background-color: var(--accent-color);
+  color: #ffffff;
+}
+html[data-theme="light"] .chat-ctl-btn:hover {
+  background: var(--bg-activity);
+  border-color: var(--border-color);
+}
+html[data-theme="light"] .attach-chips {
+  background: var(--bg-sidebar);
+  border-top-color: var(--border-subtle);
+}
+html[data-theme="light"] .attach-chip {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+html[data-theme="light"] .attach-chip-remove:hover {
+  color: #ffffff;
+  background: var(--accent-color);
+}
+
+/* ============================================================================
+   12. Misc — selection colours inside inputs, caret, xterm surface
+   ========================================================================== */
+
+html[data-theme="light"] #chat-input,
+html[data-theme="light"] .ie-input,
+html[data-theme="light"] .palette-input,
+html[data-theme="light"] .cc-dialog-input,
+html[data-theme="light"] .search-row input { caret-color: #1f1f1f; }
+
+html[data-theme="light"] #chat-input::placeholder,
+html[data-theme="light"] .ie-input::placeholder { color: #757575; }
+
+html[data-theme="light"] .xterm,
+html[data-theme="light"] .xterm-screen,
+html[data-theme="light"] .xterm-viewport { background-color: #ffffff !important; }
+
+html[data-theme="light"] body { background-color: var(--bg-editor); }

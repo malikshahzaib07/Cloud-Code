@@ -144,8 +144,11 @@
   background: rgba(229, 192, 123, 0.05);
 }
 
+/* subtle, static marker — no infinite pulse (it was distracting) */
 .tool-card[data-state="running"] { border-left-color: var(--accent-color, #007acc); }
 .tool-card[data-state="done"] { border-left-color: #3fb950; }
+.tool-card[data-state="deleted"] { border-left-color: #d29922; }
+.tool-card[data-state="moved"] { border-left-color: #a371f7; }
 .tool-card[data-state="error"] { border-left-color: #f85149; }
 .tool-card[data-state="rejected"] { border-left-color: #f85149; opacity: 0.75; }
 
@@ -193,13 +196,13 @@
 .tool-card[data-state="awaiting"] .tool-badge {
   color: #e5c07b;
   border-color: rgba(229, 192, 123, 0.5);
-  animation: agent-pulse 1.4s ease-in-out infinite;
+  background: rgba(229, 192, 123, 0.12);
+  font-weight: 600;
+  letter-spacing: 0.2px;
 }
 
-@keyframes agent-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
+.tool-card[data-state="deleted"] { border-left-color: #d29922; }
+.tool-card[data-state="moved"] { border-left-color: #a371f7; }
 
 .tool-detail {
   padding: 0 10px 8px;
@@ -483,6 +486,22 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.change-verb {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #6a6a6a;
+  border: 1px solid #3c3c3c;
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.change-btn[disabled] {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .change-actions { display: flex; gap: 4px; flex-shrink: 0; }

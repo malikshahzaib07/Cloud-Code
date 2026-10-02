@@ -161,6 +161,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (navAgentBtn) {
       navAgentBtn.classList.toggle('active', window.isAgentPanelOpen ? window.isAgentPanelOpen() : true);
     }
+    if (navThemeLabel && window.AppTheme && window.AppTheme.get) {
+      navThemeLabel.textContent = window.AppTheme.get() === 'dark' ? 'Dark' : 'Light';
+    }
   }
 
   /** Show a sidebar view, opening the sidebar if it was collapsed. */
@@ -185,17 +188,32 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   if (navExplorerBtn) {
     navExplorerBtn.onclick = () => {
-      toggleSidebar('explorer');
-      if (isSidebarOpen()) switchSidebarView('explorer');
+      if (isSidebarOpen() && sidebarView === 'explorer') {
+        toggleSidebar('explorer');            // collapse
+      } else {
+        showSidebar('explorer');              // open / switch to explorer
+      }
     };
   }
-  if (navSearchBtn) navSearchBtn.onclick = () => toggleSidebar('search');
+  // Search always opens the sidebar and focuses the input (never collapses).
+  if (navSearchBtn) navSearchBtn.onclick = () => showSidebar('search');
   if (navTerminalBtn) {
     navTerminalBtn.onclick = () => {
       if (toggleTerminalBtn) toggleTerminalBtn.click();
     };
   }
   if (navAgentBtn) navAgentBtn.onclick = () => toggleAgentPanel();
+
+  // Light / dark theme toggle.
+  const navThemeBtn = document.getElementById('nav-theme-btn');
+  const navThemeLabel = document.getElementById('nav-theme-label');
+  if (navThemeBtn) {
+    navThemeBtn.onclick = () => {
+      if (window.AppTheme && window.AppTheme.toggle) window.AppTheme.toggle();
+      syncNav();
+    };
+  }
+  window.addEventListener('theme-changed', syncNav);
 
   const paletteBtn = document.getElementById('command-palette-btn');
   if (paletteBtn && window.palette) {

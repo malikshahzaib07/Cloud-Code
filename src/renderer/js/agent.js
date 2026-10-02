@@ -89,6 +89,36 @@ const AGENT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'delete_file',
+      description: 'Delete a file from the workspace, or a folder ONLY when it is empty. Never use this to delete a whole directory tree — delete the children one by one instead. Destructive: always routed through the user approval gate.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path relative to the workspace root, or an empty folder path.' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'move_file',
+      description: 'Rename or move a file/folder. The destination folder is created if it does not exist. Fails if the destination already exists unless overwrite is true.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Existing source path relative to the workspace root.' },
+          to: { type: 'string', description: 'New path relative to the workspace root (file name may change).' },
+          overwrite: { type: 'boolean', description: 'Allow replacing an existing file at the destination (default false).' }
+        },
+        required: ['path', 'to']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'run_command',
       description: 'Run a shell command in the workspace root and return its exit code, stdout and stderr.',
       parameters: {
@@ -105,12 +135,50 @@ const AGENT_TOOLS = [
 const READONLY_TOOLS = new Set(['list_dir', 'read_file', 'search_code']);
 const TOOL_ICONS = {
   list_dir: '📁', read_file: '📖', search_code: '🔎',
-  edit_file: '✏️', write_file: '📝', run_command: '🖥️'
+  edit_file: '✏️', write_file: '📝', run_command: '🖥️',
+  delete_file: '🗑️', move_file: '📦'
 };
 const TOOL_TITLES = {
   list_dir: 'List directory', read_file: 'Read file', search_code: 'Search code',
-  edit_file: 'Edit file', write_file: 'Write file', run_command: 'Run command'
+  edit_file: 'Edit file', write_file: 'Write file', run_command: 'Run command',
+  delete_file: 'Delete file or folder', move_file: 'Move / rename'
 };
+
+/** Characters that only ever appear in decorative ASCII art, never in prose. */
+const BOX_CHARS = /[\u2500-\u257F\u2580-\u259F\u25A0-\u25FF\u2B00-\u2BFF\u2190-\u21FF]/;
+/** A line made exclusively of ASCII graphic/punctuation characters. */
+const ASCII_ART_LINE = /^[!-/:-@[-`{-~]{4,}$/;
+
+/**
+ * stripAsciiDecoration(text)
+ * Removes decorative-only lines (box drawing, ──────, ======, ~~~~, ASCII
+ * graph bars/boxes) from model prose and collapses runs of blank lines to one.
+ * Applied ONLY to agent-authored summary/notice text — never to tool output or
+ * file contents, which may legitimately contain such characters.
+ */
+function stripAsciiDecoration(text) {
+  if (typeof text !== 'string' || !text) return '';
+  const out = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const t = raw.trim();
+    // markdown table rows (and their `|---|---|` separators) are legitimate
+    const isTableRow = t.indexOf('|') !== -1;
+    if (t && !isTableRow && (BOX_CHARS.test(t) || ASCII_ART_LINE.test(t))) continue;
+    out.push(raw.replace(/\s+$/, ''));
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Collapse control characters and clamp a model line to a readable length. */
+function condenseText(text, max) {
+  const n = max || 140;
+  return String(text == null ? '' : text)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, n);
+}
 
 /**
  * Parse a line range emitted by a local model: "10-40", "10:", 25,
@@ -358,56 +426,55 @@ class AgentController {
 - Every path you pass to a tool is RELATIVE to the workspace root, e.g. "src/main.js"; use "." for the root.
 
 ## YOUR JOB
-Understand the codebase, make exactly the change that was asked for, then verify it.
-You can only learn about this project through your tools — never assume what a file contains.
+Deliver the ENTIRE requested feature, end to end, in this single turn — working, runnable code saved to disk and verified with tools. You can only learn about this project through your tools; never assume what a file contains.
 
 ## TOOLS (use these exact names and argument names)
 1. list_dir   {"path":"<dir>"} — list a folder ("." = workspace root).
-2. read_file  {"path":"<file>"} — read a whole file.
-              {"path":"<file>","start_line":10,"end_line":60} — read only a line range (use for big files).
-3. search_code {"query":"<text>"} — search every file in the workspace; optional {"glob":"*.js"} and {"regex":true}.
+2. read_file  {"path":"<file>"} — whole file; add {"start_line":10,"end_line":60} for large files.
+3. search_code {"query":"<text>"} — search the workspace; optional {"glob":"*.js"}, {"regex":true}.
 4. edit_file  {"path":"<file>","old_string":"<exact text that exists>","new_string":"<replacement>","replace_all":false}
-5. write_file {"path":"<file>","content":"<the complete file content>"} — create a file, or deliberately overwrite one.
-6. run_command {"command":"<powershell command>"} — run a shell command in the workspace root.
+5. write_file {"path":"<file>","content":"<the complete file content>"} — create or deliberately overwrite.
+6. delete_file {"path":"<file or empty folder>"} — deletes a file, or a folder ONLY when empty.
+7. move_file  {"path":"<from>","to":"<to>","overwrite":false} — rename/move; dest folders auto-created.
+8. run_command {"command":"<powershell command>"} — run in the workspace root.
 
-## MANDATORY WORKFLOW
-1. ORIENT  — list_dir the relevant folder before guessing a path.
-2. READ    — read_file every file you intend to change.
-3. PLAN    — choose the smallest change that satisfies the request.
-4. ACT     — edit_file for existing files, write_file for new files.
-5. VERIFY  — read_file the changed region again, or run the project's tests/lint/build.
-6. REPORT  — stop calling tools and summarise what you changed.
+## COMPLETENESS RULES (violating these is a failure)
+- Implement the WHOLE request in one turn. No placeholders, no "// ...rest of implementation", no TODO, no empty or stubbed function bodies, no "you can extend this further", no "apply the same change elsewhere".
+- If the request implies N files, change all N. Do not stop after the first one.
+- Read a SIBLING file of the same kind first and imitate it: import style, module system, naming, error handling, logging, formatting, comment density.
+- Handle the errors and edge cases the real code must survive (missing file, empty input, async failure) in the same style as the surrounding code.
+- Everything you write must run as-is. Never depend on code you did not write or did not verify.
+- Reuse the project's existing utilities; never add a dependency unless the user asked.
 
-Call ONE tool per turn and wait for its result before deciding the next step.
+## WORKFLOW
+1. ORIENT  — list_dir, then read_file the target and at least one sibling.
+2. PLAN    — decide the full set of changes before acting.
+3. ACT     — write_file / edit_file file by file, one tool call per turn.
+4. VERIFY  — read_file the result back, and run the project's build/test/lint via run_command when one exists (check package.json). Fix any failure, then re-verify.
+5. REPORT  — stop calling tools and summarise what changed and how it was verified.
 
-## CREATING FILES (this is the most common failure — read carefully)
-- Create files with write_file containing the FULL content. Any missing folders in the path are created automatically, so "src/components/Button.js" works even when src/components does not exist yet.
-- NEVER create a file with run_command redirection (">" or ">>"). Always use write_file.
-- Keep files small (under ~200 lines). For a longer file: write_file the first part, then extend it with edit_file.
-- New code must match the project's existing style: indentation, quote style, semicolons, import style, naming.
+## EDITING SAFELY
+- write_file must contain the FULL content; missing folders are created automatically. Never create files with run_command redirection.
+- old_string must match the file EXACTLY (whitespace + indentation) and be unique — include 2-3 surrounding lines when the text repeats, otherwise set replace_all.
+- delete_file refuses non-empty folders: delete the children first.
+- PowerShell: Get-ChildItem, Select-String, npm test, git status, git diff. Commands already start in the workspace root — never cd first.
+- Never run destructive commands (del /s, Remove-Item -Recurse, git reset --hard, git clean) unless explicitly asked.
 
-## EDITING FILES SAFELY
-- old_string must match the file exactly, including indentation and newlines, and must be unique — include 2-3 surrounding lines of context when the text appears more than once.
-- Prefer edit_file for existing files; write_file replaces the whole file.
-- After editing, read the file again to confirm the change landed correctly.
-
-## RUNNING COMMANDS
-- PowerShell syntax: Get-ChildItem, Select-String, npm test, git status, git diff.
-- The command already starts in the workspace root — never cd first.
-- Use run_command to verify your work and to inspect state (git status, git diff, test output).
-- Never run destructive commands (del /s, Remove-Item -Recurse, git reset --hard, git clean, format) unless the user explicitly asked.
+## OUTPUT STYLE
+- Never draw ASCII art, box-drawing characters, progress bars, graphs, or decorative separator lines ("---", "===", "~~~", "────"). Use plain prose and markdown lists instead.
+- Wrap code in fenced code blocks ONLY when you are actually showing code.
+- Be concise: report what changed, where, and how it was verified.
 
 ## RULES
-- Keep changes minimal and consistent with the surrounding code.
 - Every mutating action is approved by the user. A rejection is final: do not repeat it — adapt or ask.
-- Tool results can contain errors. Read them, correct your approach, never repeat a failing call unchanged.
+- Read tool results, including errors; never repeat a failing call unchanged.
 - Never claim something works unless a tool verified it.
 - Do not create README/notes/summary files unless asked.
 
 ${thinkLine}
 
 ## WHEN THE TASK IS DONE
-Stop calling tools and reply with a short summary: which files changed and why, plus any commands you ran.
+Reply with a short prose summary: which files changed and why, plus any commands you ran.
 
 If native function calling is unavailable in your responses, output ONLY this block, then wait for the result:
 <<<TOOL>>>
@@ -445,8 +512,10 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
   // ==========================================================================
   async loop() {
     const maxSteps = window.AppSettings ? (+window.AppSettings.get('maxSteps') || 15) : 15;
+    this._maxSteps = maxSteps;
     const model = document.getElementById('model-select')
       ? document.getElementById('model-select').value : undefined;
+    let finalSummary = '';
 
     while (!this.cancelRequested) {
       this.step += 1;
@@ -456,6 +525,7 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
         break;
       }
       this.setStatus(`Thinking… (step ${this.step}/${maxSteps})`);
+      this.emitThinking('planning', `Planning next step (${this.step}/${maxSteps})`, this.step);
 
       const thinking = this.pushThinking();
       let res = null;
@@ -496,9 +566,16 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       }
 
       if (toolCalls.length === 0) {
-        this.messages.push({ role: 'assistant', content: content || '(no response)' });
-        this.pushAssistant(content || '(The agent produced no final response.)');
+        const clean = stripAsciiDecoration(content);
+        finalSummary = clean;
+        this.messages.push({ role: 'assistant', content: clean || '(no response)' });
+        this.pushAssistant(clean || '(The agent produced no final response.)');
+        this.emitThinking('done', (clean || 'Finished').split('\n')[0], this.step);
         break;
+      }
+
+      if (content) {
+        this.emitThinking('thinking', condenseText(content, 400), this.step);
       }
 
       this.messages.push(this.formatAssistantTurn(res, content, toolCalls));
@@ -517,6 +594,27 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       this.pushNotice('⏹ Agent stopped.');
       this.cancelRequested = false;
     }
+    if (!finalSummary) {
+      this.emitThinking('done', this.cancelRequested ? 'Stopped by the user' : 'Finished', this.step);
+    }
+  }
+
+  /**
+   * Realtime progress signal for the chat panel.
+   * Event: window 'agent:thinking'
+   * detail: { text: string (<=140 chars, plain text), phase: 'planning'|'thinking'|'tool'|'done', step: number }
+   * Never throws, even if dispatchEvent / CustomEvent are unavailable.
+   */
+  emitThinking(phase, text, step) {
+    try {
+      if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+      const clean = condenseText(text, 140);
+      const evt = typeof CustomEvent === 'function'
+        ? new CustomEvent('agent:thinking', { detail: { text: clean, phase, step: step || 0 } })
+        : null;
+      if (!evt) return;
+      window.dispatchEvent(evt);
+    } catch (e) { /* never let a UI signal break the loop */ }
   }
 
   // ==========================================================================
@@ -526,6 +624,7 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     const name = tc.name;
     const args = this.normalizeArgs(name, tc.arguments || {});
     const card = this.renderToolCard(name, args);
+    const title = TOOL_TITLES[name] || name;
 
     if (!AGENT_TOOLS.some((t) => t.function.name === name)) {
       card.setState('error', 'Unknown tool: ' + name);
@@ -534,19 +633,23 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
 
     try {
       const plan = await this.prepareTool(name, args);
+      this.emitThinking('tool', `${title}: ${condenseText(this.planTarget(plan, args), 100)}`, this.step);
 
       if (plan.kind === 'read') {
         card.setState('running');
         const out = await plan.run();
         card.setState('done', out);
+        this.emitThinking('tool', `${title} finished`, this.step);
         return this.trunc(out, 6000);
       }
 
       // Mutating actions go through the autonomy gate
       card.setState('awaiting');
+      this.emitThinking('tool', `Waiting for approval: ${title} ${condenseText(this.planTarget(plan, args), 80)}`, this.step);
       const approved = await this.requestPermission(card, plan);
       if (!approved) {
         card.setState('rejected');
+        this.emitThinking('tool', `${title} rejected by the user`, this.step);
         return 'The user rejected this action. Do not repeat it — adapt your approach or ask the user what they would prefer.';
       }
 
@@ -554,7 +657,24 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
         card.setState('running');
         await this.applyEdit(plan);
         card.setState('done', plan.summary);
+        this.emitThinking('tool', `${title} applied: ${condenseText(plan.summary, 100)}`, this.step);
         return `Applied and saved: ${plan.path}\n${plan.summary}\nThe file on disk has been updated.`;
+      }
+
+      if (plan.kind === 'delete') {
+        card.setState('running');
+        const summary = await this.applyDelete(plan);
+        card.setState('deleted', summary);
+        this.emitThinking('tool', `${title}: ${condenseText(summary, 100)}`, this.step);
+        return summary;
+      }
+
+      if (plan.kind === 'move') {
+        card.setState('running');
+        const summary = await this.applyMove(plan);
+        card.setState('moved', summary);
+        this.emitThinking('tool', `${title}: ${condenseText(summary, 100)}`, this.step);
+        return summary;
       }
 
       if (plan.kind === 'command') {
@@ -686,6 +806,91 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
             : this.diffSummary(original, content) + ' (write_file overwrite)'
         };
       }
+      case 'delete_file': {
+        const rel = String(args.path || '').trim();
+        if (!rel) throw new Error('delete_file requires a path.');
+        const file = this.resolvePath(rel);
+        const rootRaw = String(window.explorer ? window.explorer.rootPath : '').replace(/\\/g, '/').replace(/\/+$/, '');
+        const rootLower = rootRaw.toLowerCase();
+
+        // Refuse to nuke the workspace root itself.
+        if (file.toLowerCase() === rootLower || file.toLowerCase() + '/' === rootLower + '/') {
+          throw new Error(
+            `Refusing to delete the workspace root (${rel}). ` +
+            'Delete files and subfolders individually instead, or ask the user to close the folder manually.'
+          );
+        }
+
+        // A readable text file → plain file delete. Otherwise treat it as a folder.
+        const content = await window.electronAPI.readFile(file).catch(() => null);
+        if (content !== null) {
+          const bytes = new Blob([content]).size;
+          return {
+            kind: 'delete',
+            path: file,
+            relPath: rel,
+            isDir: false,
+            original: content,
+            summary: `deleted file ${rel} (${this.humanSize(bytes)}) (delete_file)`
+          };
+        }
+
+        const entries = await window.electronAPI.readDirectory(file).catch((e) => {
+          const err = new Error(`Nothing to delete at ${rel}: ${e && e.message ? e.message : 'path not found'}`);
+          err.__notFound = true;
+          throw err;
+        });
+
+        if (entries.length) {
+          const names = entries.slice(0, 20).map((e) => (e.isDirectory ? e.name + '/' : e.name));
+          const more = entries.length > 20 ? ` (+${entries.length - 20} more)` : '';
+          throw new Error(
+            `Folder "${rel}" is not empty (${entries.length} entries: ${names.join(', ')}${more}). ` +
+            'delete_file only removes empty folders — delete the children with delete_file first, one at a time.'
+          );
+        }
+
+        // Empty folder.
+        return {
+          kind: 'delete',
+          path: file,
+          relPath: rel,
+          isDir: true,
+          summary: `deleted empty folder ${rel} (delete_file)`
+        };
+      }
+      case 'move_file': {
+        const fromRel = String(args.path || '').trim();
+        const toRel = String(args.to || '').trim();
+        if (!fromRel) throw new Error('move_file requires "path" (the source).');
+        if (!toRel) throw new Error('move_file requires "to" (the destination).');
+        const from = this.resolvePath(fromRel);
+        const to = this.resolvePath(toRel);
+        if (from.toLowerCase() === to.toLowerCase()) {
+          throw new Error('move_file: source and destination are the same path — nothing to do.');
+        }
+
+        const existing = await window.electronAPI.readFile(to).catch(() => null);
+        const destExists = existing !== null ||
+          (await window.electronAPI.readDirectory(to).catch(() => null) !== null);
+        if (destExists && !args.overwrite) {
+          throw new Error(
+            `move_file: "${toRel}" already exists. Choose a different destination, or set overwrite=true to replace it.`
+          );
+        }
+        const srcIsDir = (await window.electronAPI.readDirectory(from).catch(() => null)) !== null;
+
+        return {
+          kind: 'move',
+          path: from,
+          to,
+          fromRel,
+          toRel,
+          isDir: srcIsDir,
+          overwrite: !!args.overwrite,
+          summary: `moved ${fromRel} → ${toRel} (move_file)`
+        };
+      }
       case 'run_command': {
         const command = String(args.command || '').trim();
         if (!command) throw new Error('command must not be empty.');
@@ -721,8 +926,9 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
         card.openDiff(plan, (ok) => finish(ok, false));
       }
 
+      const approvedLabel = plan.kind === 'command' ? '▶ Run' : '✓ Approve';
       card.showActions([
-        { label: plan.kind === 'edit' ? '✓ Approve' : '▶ Run', cls: 'approve', onClick: () => finish(true, false) },
+        { label: approvedLabel, cls: 'approve', onClick: () => finish(true, false) },
         { label: '✕ Reject', cls: 'reject', onClick: () => finish(false, false) },
         { label: 'Allow all in this session', cls: 'allow', onClick: () => finish(true, true) }
       ]);
@@ -760,6 +966,85 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     this.refreshIndexes();
   }
 
+  // --- Apply an approved delete --------------------------------------------
+  async applyDelete(plan) {
+    if (!plan.isDir) {
+      const original = plan.original !== undefined && plan.original !== null
+        ? plan.original
+        : (await window.electronAPI.readFile(plan.path).catch(() => ''));
+      const r = await window.electronAPI.deletePath(plan.path);
+      if (r && r.error) throw new Error(`delete_file failed: ${r.error}`);
+      // tracked with updated === null so "revert" restores the file
+      this.trackChange(plan.path, original, null);
+    } else {
+      const r = await window.electronAPI.deletePath(plan.path);
+      if (r && r.error) throw new Error(`delete_file failed: ${r.error}`);
+      this.changes.delete(plan.path);
+    }
+    this.closeTabFor(plan.path);
+    this.refreshIndexes();
+    return plan.summary;
+  }
+
+  // --- Apply an approved move / rename --------------------------------------
+  async applyMove(plan) {
+    const lastSlash = Math.max(plan.to.lastIndexOf('/'), plan.to.lastIndexOf('\\'));
+    if (lastSlash > 0) {
+      await window.electronAPI.createDirectory(plan.to.slice(0, lastSlash)).catch(() => {});
+    }
+    if (plan.overwrite) await window.electronAPI.deletePath(plan.to).catch(() => {});
+
+    let res = await window.electronAPI.renamePath(plan.path, plan.to).catch((e) => ({ error: e && e.message ? e.message : String(e) }));
+    if (!res || res.error) {
+      // Fallback for cross-volume moves the OS cannot rename directly.
+      if (!plan.isDir) {
+        const content = await window.electronAPI.readFile(plan.path);
+        await window.electronAPI.writeFile(plan.to, content);
+        await window.electronAPI.deletePath(plan.path).catch(() => {});
+        res = { ok: true };
+      } else {
+        throw new Error(`move_file failed: ${(res && res.error) || 'unknown error'}`);
+      }
+    }
+
+    const previous = this.changes.get(plan.path);
+    if (previous) this.changes.delete(plan.path);
+    if (!plan.isDir) {
+      // tracked with original === null so "revert" removes the moved-in file
+      this.trackChange(plan.to, null, previous ? previous.updated : '');
+    } else {
+      this.renderChangesBadge();
+      this.renderChangesList();
+    }
+    this.closeTabFor(plan.path);
+    this.refreshIndexes();
+    return plan.summary;
+  }
+
+  closeTabFor(path) {
+    try {
+      const em = window.editor;
+      if (em && em.tabs && em.tabs.has && em.tabs.has(path)) em.closeByKey ? em.closeByKey(path) : null;
+    } catch (e) { /* tab bookkeeping is best-effort */ }
+  }
+
+  /** Short one-line description of what a prepared tool call will do. */
+  planTarget(plan, args) {
+    if (plan && plan.relPath) {
+      return plan.kind === 'move' ? `${plan.fromRel} -> ${plan.toRel}` : plan.relPath;
+    }
+    if (plan && plan.path) return plan.path;
+    if (plan && plan.command) return plan.command;
+    return (args && (args.path || args.query || args.command)) || '';
+  }
+
+  humanSize(bytes) {
+    const n = Number(bytes) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
   trackChange(path, original, updated) {
     this.changes.set(path, { path, original, updated, time: Date.now() });
     this.renderChangesBadge();
@@ -769,7 +1054,18 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
   async revertChange(path) {
     const change = this.changes.get(path);
     if (!change) return;
-    await window.electronAPI.writeFile(path, change.original);
+    if (change.updated === null) {
+      // was deleted by the agent → restore it
+      await window.electronAPI.createDirectory(
+        path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))) || '.'
+      ).catch(() => {});
+      await window.electronAPI.writeFile(path, change.original == null ? '' : change.original);
+    } else if (change.original === null) {
+      // was created by the agent (e.g. moved in) → remove it again
+      await window.electronAPI.deletePath(path);
+    } else {
+      await window.electronAPI.writeFile(path, change.original);
+    }
     const em = window.editor;
     if (em && em.tabs) {
       const tab = em.tabs.get(path);
@@ -833,19 +1129,26 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       row.className = 'change-row';
       const name = change.path.split(/[\\/]/).pop();
       const dir = change.path.split(/[\\/]/).slice(-2, -1)[0] || '';
+      const deleted = change.updated === null;
+      const added = change.original === null;
+      const verb = deleted ? 'deleted' : (added ? 'added/moved in' : 'edited');
       row.innerHTML = `
         <div class="change-info" title="${this.escapeAttr(change.path)}">
           <span class="change-name">${this.escape(name)}</span>
           <span class="change-dir">${this.escape(dir)}/</span>
+          <span class="change-verb">${verb}</span>
         </div>
         <div class="change-actions">
-          <button class="change-btn" data-act="diff" title="Review diff">◈ Diff</button>
+          <button class="change-btn" data-act="diff" title="Review diff"${deleted || added ? ' disabled' : ''}>◈ Diff</button>
           <button class="change-btn" data-act="revert" title="Revert to original">↺</button>
         </div>
       `;
-      row.querySelector('[data-act="diff"]').addEventListener('click', () => {
-        this.openChangeDiff(change);
-      });
+      const diffBtn = row.querySelector('[data-act="diff"]');
+      if (!deleted && !added) {
+        diffBtn.addEventListener('click', () => {
+          this.openChangeDiff(change);
+        });
+      }
       row.querySelector('[data-act="revert"]').addEventListener('click', async () => {
         await this.revertChange(change.path);
         this.renderChangesList();
@@ -883,7 +1186,8 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     node.className = 'tool-card';
     node.dataset.state = 'pending';
 
-    const target = args.path || args.command || args.query || '';
+    const target = (args.path && args.to ? `${args.path} → ${args.to}` : null)
+      || args.path || args.command || args.query || '';
     node.innerHTML = `
       <div class="tool-head">
         <span class="tool-ico">${TOOL_ICONS[name] || '🔧'}</span>
@@ -908,7 +1212,8 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
         node.dataset.state = state;
         const labels = {
           pending: '…', running: 'working…', done: '✓ done',
-          error: '✗ error', rejected: '✕ rejected', awaiting: 'approval needed'
+          deleted: '🗑 deleted', moved: '📦 moved',
+          error: '✗ error', rejected: '✕ rejected', awaiting: 'awaiting approval'
         };
         badge.textContent = labels[state] || state;
         if (text) {
@@ -921,7 +1226,7 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
           detail.appendChild(pre);
           if (window.ai) window.ai.scrollToBottom();
         }
-        if (state === 'done' || state === 'error' || state === 'rejected') {
+        if (state === 'done' || state === 'deleted' || state === 'moved' || state === 'error' || state === 'rejected') {
           actions.classList.add('hidden');
         }
       },
@@ -1019,11 +1324,13 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
   pushNotice(markdown) {
     const container = document.getElementById('chat-messages');
     if (!container) return null;
+    // notices are agent-authored prose — strip decorative ASCII lines
+    const clean = stripAsciiDecoration(markdown);
     const el = document.createElement('div');
     el.className = 'agent-notice';
     const ai = window.ai;
-    if (ai) el.innerHTML = ai.renderMarkdown(markdown);
-    else el.textContent = markdown;
+    if (ai) el.innerHTML = ai.renderMarkdown(clean);
+    else el.textContent = clean;
     container.appendChild(el);
     if (ai) ai.scrollToBottom();
     return el;
@@ -1143,11 +1450,36 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       if (query !== undefined && a.query === undefined) a.query = query;
     }
 
+    if (name === 'move_file' || name === 'rename_file') {
+      const from = pick('from', 'source', 'src', 'source_path', 'sourcePath',
+        'old_path', 'oldPath', 'old_name', 'oldName', 'path');
+      if (from !== undefined && a.path === undefined) a.path = from;
+      const to = pick('to', 'dest', 'destination', 'destination_path', 'destinationPath',
+        'dst', 'new_path', 'newPath', 'new_name', 'newName', 'target_path', 'targetPath');
+      if (to !== undefined && a.to === undefined) a.to = to;
+      // a bare "target" was already folded into path by the generic picker above;
+      // if the model used it as the destination, swap it over.
+      if (a.to === undefined && (a.dest !== undefined || a.destination !== undefined)) {
+        a.to = a.dest !== undefined ? a.dest : a.destination;
+      }
+      const ow = pick('overwrite', 'overwriteExisting', 'force', 'replace');
+      if (ow !== undefined && a.overwrite === undefined) a.overwrite = ow;
+      if (a.overwrite === undefined && a.force !== undefined) a.overwrite = a.force;
+    }
+
+    if (name === 'delete_file') {
+      // `target` / `file` / `filename` are folded into path by the generic picker.
+      if (a.path === undefined) {
+        const p = pick('target', 'file', 'filename', 'file_name', 'dir', 'directory', 'folder');
+        if (p !== undefined) a.path = p;
+      }
+    }
+
     const command = pick('command', 'cmd', 'shell_command', 'shellCommand', 'script', 'run');
     if (command !== undefined && a.command === undefined) a.command = command;
 
     // stringly-typed booleans
-    for (const k of ['replace_all', 'replaceAll', 'regex', 'case_sensitive', 'caseSensitive']) {
+    for (const k of ['replace_all', 'replaceAll', 'regex', 'case_sensitive', 'caseSensitive', 'overwrite']) {
       if (typeof a[k] === 'string') a[k] = /^(true|yes|1)$/i.test(a[k].trim());
     }
     if (a.replace_all === undefined && a.replaceAll !== undefined) a.replace_all = a.replaceAll;
@@ -1217,3 +1549,14 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
 }
 
 window.AgentController = AgentController;
+
+// Exposed for tests / tooling: schemas and pure text helpers.
+window.AgentInternals = {
+  AGENT_TOOLS,
+  READONLY_TOOLS,
+  TOOL_ICONS,
+  TOOL_TITLES,
+  stripAsciiDecoration,
+  condenseText,
+  parseLineRange
+};

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,6 +15,9 @@
   <link rel="stylesheet" href="styles/settings.css">
   <link rel="stylesheet" href="styles/chat-controls.css">
   <link rel="stylesheet" href="styles/chat.css">
+  <link rel="stylesheet" href="styles/explorer-menu.css">
+  <!-- Light theme overrides (must come last so it wins) -->
+  <link rel="stylesheet" href="styles/theme-light.css">
 </head>
 <body>
   <div id="app">
@@ -42,6 +45,10 @@
         <button class="nav-btn active" id="nav-agent-btn" type="button" title="Toggle Agent Panel (Ctrl+Shift+A)">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="13" r="1.5"/><circle cx="15" cy="13" r="1.5"/></svg>
           <span>Agent</span>
+        </button>
+        <button class="nav-btn" id="nav-theme-btn" type="button" title="Toggle light / dark theme">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M8 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0 1.5a.75.75 0 0 1 .75.75v1a.75.75 0 0 1-1.5 0v-1a.75.75 0 0 1 .75-.75zm0-11a.75.75 0 0 1 .75.75v1a.75.75 0 0 1-1.5 0v-1A.75.75 0 0 1 8 1.5zm6.5 5.75a.75.75 0 0 1-.75.75h-1a.75.75 0 0 1 0-1.5h1a.75.75 0 0 1 .75.75zM9 14.5a.75.75 0 0 1 0-1.5h1a.75.75 0 0 1 0 1.5H9zm4.5-2.5a.75.75 0 0 1-.53.22l-.7-.7a.75.75 0 1 1 1.06-1.06l.7.7a.75.75 0 0 1-.53.84zM5.7 4.36l-.7-.7a.75.75 0 0 1 1.06-1.06l.7.7a.75.75 0 0 1-1.06 1.06zM14.5 8a.75.75 0 0 1-.75.75h-1a.75.75 0 0 1 0-1.5h1A.75.75 0 0 1 14.5 8zM3.76 13.22a.75.75 0 0 1-1.06-1.06l.7-.7a.75.75 0 0 1 1.06 1.06l-.7.7z"/></svg>
+          <span id="nav-theme-label">Light</span>
         </button>
       </div>
       <div class="window-title" id="active-file-title">Cloud Code - AI Code Editor</div>
@@ -240,6 +247,7 @@
   <script src="../../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
 
   <!-- Application Modules -->
+  <script src="js/theme.js"></script>
   <script src="js/icons.js"></script>
   <script src="js/terminal.js"></script>
   <script src="js/editor.js"></script>
@@ -253,6 +261,7 @@
   <script src="js/search.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/chat-controls.js"></script>
+  <script src="js/watcher.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

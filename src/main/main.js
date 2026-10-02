@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -192,6 +192,78 @@ ipcMain.handle('fs:createFile', async (event, filePath) => {
 ipcMain.handle('fs:createDirectory', async (event, dirPath) => {
   await fsp.mkdir(dirPath, { recursive: true });
   return true;
+});
+
+// ---------------------------------------------------------------------------
+// Workspace watching — powers auto-reload of the explorer tree and of files
+// that are open in the editor (edited by the agent, git, an external editor…).
+// ---------------------------------------------------------------------------
+let workspaceWatcher = null;
+let watchDebounce = null;
+
+function stopWorkspaceWatch() {
+  if (watchDebounce) {
+    clearTimeout(watchDebounce);
+    watchDebounce = null;
+  }
+  if (workspaceWatcher) {
+    try { workspaceWatcher.close(); } catch (e) { /* already closed */ }
+    workspaceWatcher = null;
+  }
+}
+
+ipcMain.handle('fs:watch', async (event, rootPath) => {
+  stopWorkspaceWatch();
+  if (!rootPath || !fs.existsSync(rootPath)) return false;
+  try {
+    workspaceWatcher = fs.watch(rootPath, { recursive: true }, (eventType, filename) => {
+      if (!filename) return;
+      const rel = String(filename).replace(/\\/g, '/');
+      // Ignore noisy paths we never render.
+      if (rel.startsWith('node_modules/') || rel.includes('/node_modules/') ||
+          rel.includes('.git/') || rel.startsWith('.git/') ||
+          rel.startsWith('release/') || rel.startsWith('dist/') ||
+          rel.endsWith('~') || rel.endsWith('.tmp')) return;
+
+      if (watchDebounce) clearTimeout(watchDebounce);
+      watchDebounce = setTimeout(() => {
+        watchDebounce = null;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('fs:changed', { type: eventType, path: rel });
+        }
+      }, 250);
+    });
+    workspaceWatcher.on('error', (err) => {
+      console.warn('workspace watch error:', err.message);
+      stopWorkspaceWatch();
+    });
+    return true;
+  } catch (err) {
+    // Recursive watching is unsupported on some platforms — degrade silently.
+    console.warn('fs:watch unavailable:', err.message);
+    workspaceWatcher = null;
+    return false;
+  }
+});
+
+ipcMain.handle('fs:unwatch', async () => {
+  stopWorkspaceWatch();
+  return true;
+});
+
+// "Reveal in Explorer" for the file-tree context menu.
+ipcMain.handle('shell:showItemInFolder', async (event, targetPath) => {
+  try {
+    if (!targetPath || !fs.existsSync(targetPath)) return false;
+    shell.showItemInFolder(targetPath);
+    return true;
+  } catch (err) {
+    return false;
+  }
+});
+
+app.on('before-quit', () => {
+  stopWorkspaceWatch();
 });
 
 ipcMain.handle('fs:deletePath', async (event, targetPath) => {

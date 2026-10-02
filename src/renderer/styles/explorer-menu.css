@@ -1,0 +1,118 @@
+/* ==========================================================================
+   Explorer context menu + inline hover actions
+   All classes are namespaced ctx- / tree-hover- so they cannot collide with
+   the other modules. Colours come from the shared CSS variables, which the
+   light theme (html[data-theme="light"]) overrides - hence both themes work.
+   ========================================================================== */
+
+/* --- VS Code-style right-click popup ------------------------------------- */
+.ctx-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 170px;
+  padding: 4px 0;
+  border-radius: 5px;
+  border: 1px solid var(--border-color, #3e3e42);
+  background: var(--bg-sidebar, #252526);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.36),
+    0 8px 24px rgba(0, 0, 0, 0.28);
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary, #cccccc);
+  user-select: none;
+  animation: ctx-menu-in 0.06s ease-out;
+}
+
+@keyframes ctx-menu-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ctx-menu .ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 22px 4px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary, #cccccc);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ctx-menu .ctx-item:hover,
+.ctx-menu .ctx-item.selected,
+.ctx-menu .ctx-item:focus {
+  background: var(--accent-color, #007acc);
+  color: var(--text-active, #ffffff);
+  outline: none;
+}
+
+.ctx-menu .ctx-item.danger {
+  color: #f14c4c;
+}
+
+.ctx-menu .ctx-item.danger:hover,
+.ctx-menu .ctx-item.danger.selected,
+.ctx-menu .ctx-item.danger:focus {
+  background: #c72e0f;
+  color: #ffffff;
+}
+
+.ctx-menu .ctx-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+.ctx-menu .ctx-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-color, #3e3e42);
+}
+
+/* --- Inline hover actions on folder rows --------------------------------- */
+.tree-node {
+  position: relative;
+}
+
+.tree-node .tree-hover-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.08s ease;
+}
+
+.tree-node:hover > .tree-hover-actions,
+.tree-node:focus-within > .tree-hover-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tree-node .tree-hover-btn {
+  padding: 2px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-secondary, #969696);
+  border-radius: 3px;
+}
+
+.tree-node .tree-hover-btn:hover {
+  background: rgba(128, 128, 128, 0.28);
+  color: var(--text-active, #ffffff);
+}
