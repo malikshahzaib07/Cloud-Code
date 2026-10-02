@@ -30,6 +30,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------------------------------------------------------
   // Activity Bar Navigation
   // ---------------------------------------------------------------------------
+  // Current sidebar view name (kept in sync with the active .sidebar-view).
+  let sidebarView = 'explorer';
+
   function switchView(name) {
     // The AI/Agent view now lives in its own left panel, not in the sidebar.
     if (name === 'ai-chat') {
@@ -45,6 +48,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (name === 'search' && window.workspaceSearch && window.workspaceSearch.focusInput) {
       window.workspaceSearch.focusInput();
     }
+    sidebarView = name;
+    syncNav();
   }
   window.switchSidebarView = switchView;
 
@@ -68,6 +73,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try { window.ai.input.focus(); } catch (e) { /* input not ready */ }
     }
     if (window.editor && typeof window.editor.relayout === 'function') window.editor.relayout();
+    syncNav();
     return willShow;
   }
   window.toggleAgentPanel = toggleAgentPanel;
@@ -131,8 +137,65 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else {
         bottomPanel.style.display = 'none';
       }
+      syncNav();
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // Top navigation bar (VS Code-style: Explorer | Search | Terminal | Agent)
+  // ---------------------------------------------------------------------------
+  const sidebarEl = document.getElementById('sidebar');
+  const navExplorerBtn = document.getElementById('nav-explorer-btn');
+  const navSearchBtn = document.getElementById('nav-search-btn');
+  const navTerminalBtn = document.getElementById('nav-terminal-btn');
+  const navAgentBtn = document.getElementById('nav-agent-btn');
+
+  const isSidebarOpen = () => !!(sidebarEl && !sidebarEl.classList.contains('hidden'));
+  const isTerminalOpen = () => !bottomPanel || bottomPanel.style.display !== 'none';
+
+  function syncNav() {
+    const open = isSidebarOpen();
+    if (navExplorerBtn) navExplorerBtn.classList.toggle('active', open && sidebarView === 'explorer');
+    if (navSearchBtn) navSearchBtn.classList.toggle('active', open && sidebarView === 'search');
+    if (navTerminalBtn) navTerminalBtn.classList.toggle('active', isTerminalOpen());
+    if (navAgentBtn) {
+      navAgentBtn.classList.toggle('active', window.isAgentPanelOpen ? window.isAgentPanelOpen() : true);
+    }
+  }
+
+  /** Show a sidebar view, opening the sidebar if it was collapsed. */
+  function showSidebar(name) {
+    if (sidebarEl) sidebarEl.classList.remove('hidden');
+    switchSidebarView(name);
+    if (window.editor && typeof window.editor.relayout === 'function') window.editor.relayout();
+    syncNav();
+  }
+
+  /** Toggle the sidebar; when opening, switch to the requested view. */
+  function toggleSidebar(name) {
+    if (isSidebarOpen()) {
+      if (sidebarEl) sidebarEl.classList.add('hidden');
+    } else {
+      if (sidebarEl) sidebarEl.classList.remove('hidden');
+      switchSidebarView(name);
+    }
+    if (window.editor && typeof window.editor.relayout === 'function') window.editor.relayout();
+    syncNav();
+  }
+
+  if (navExplorerBtn) {
+    navExplorerBtn.onclick = () => {
+      toggleSidebar('explorer');
+      if (isSidebarOpen()) switchSidebarView('explorer');
+    };
+  }
+  if (navSearchBtn) navSearchBtn.onclick = () => toggleSidebar('search');
+  if (navTerminalBtn) {
+    navTerminalBtn.onclick = () => {
+      if (toggleTerminalBtn) toggleTerminalBtn.click();
+    };
+  }
+  if (navAgentBtn) navAgentBtn.onclick = () => toggleAgentPanel();
 
   const paletteBtn = document.getElementById('command-palette-btn');
   if (paletteBtn && window.palette) {
@@ -234,10 +297,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } else if (e.shiftKey && (k === 'e' || k === 'E')) {
       e.preventDefault();
-      switchSidebarView('explorer');
+      showSidebar('explorer');
     } else if (e.shiftKey && (k === 'f' || k === 'F')) {
       e.preventDefault();
-      switchSidebarView('search');
+      showSidebar('search');
     } else if (e.shiftKey && (k === 'a' || k === 'A')) {
       e.preventDefault();
       toggleAgentPanel();

@@ -7,7 +7,14 @@
 // ============================================================================
 
 window.AppSettings = {
-  DEFAULTS: { agentMode: 'ask', maxSteps: 15, autocompleteEnabled: true, autocompleteDelay: 350 },
+  DEFAULTS: {
+    agentMode: 'ask',
+    maxSteps: 15,
+    autocompleteEnabled: true,
+    autocompleteDelay: 350,
+    agentAllowOutsideWorkspace: false,
+    agentMaxTokens: 4096
+  },
   data: {},
   async load() {
     if (window.electronAPI && window.electronAPI.settingsGet) {
@@ -123,6 +130,18 @@ class SettingsModal {
             <div class="field">
               <label for="set-maxsteps">Maximum agent steps per task</label>
               <input type="number" id="set-maxsteps" min="1" max="50" value="15">
+            </div>
+            <div class="field">
+              <label for="set-agent-maxtokens">Token budget per agent turn</label>
+              <input type="number" id="set-agent-maxtokens" min="512" max="16384" step="256" value="4096">
+              <p class="settings-note">Raise it if the agent struggles to write longer files (a local model may truncate its output).</p>
+            </div>
+            <div class="field">
+              <label class="check-label" for="set-outside-workspace">
+                <input type="checkbox" id="set-outside-workspace">
+                <span>Allow agent outside workspace</span>
+              </label>
+              <p class="settings-note">Lets the agent read/write absolute paths outside the opened folder (e.g. system files). Every edit still needs your approval.</p>
             </div>
             <p class="settings-note">You can also switch modes from the chat header.</p>
           </section>
@@ -294,6 +313,10 @@ class SettingsModal {
     if (delayEl) delayEl.value = S ? S.get('autocompleteDelay') : 350;
     const stepsEl = this.$('set-maxsteps');
     if (stepsEl) stepsEl.value = S ? S.get('maxSteps') : 15;
+    const tokEl = this.$('set-agent-maxtokens');
+    if (tokEl) tokEl.value = S ? S.get('agentMaxTokens') : 4096;
+    const outsideEl = this.$('set-outside-workspace');
+    if (outsideEl) outsideEl.checked = !!(S && S.get('agentAllowOutsideWorkspace'));
 
     let mode = S ? S.get('agentMode') : 'ask';
     if (mode !== 'ask' && mode !== 'edit-auto' && mode !== 'full-auto') mode = 'ask';
@@ -366,6 +389,10 @@ class SettingsModal {
       const autocompleteEnabled = acEl ? !!acEl.checked : true;
       const autocompleteDelay = SettingsModal._clampInt(
         this.$('set-autodelay') ? this.$('set-autodelay').value : null, 100, 3000, 350);
+      const agentMaxTokens = SettingsModal._clampInt(
+        this.$('set-agent-maxtokens') ? this.$('set-agent-maxtokens').value : null, 512, 16384, 4096);
+      const outsideEl = this.$('set-outside-workspace');
+      const agentAllowOutsideWorkspace = outsideEl ? !!outsideEl.checked : false;
 
       if (window.electronAPI && window.electronAPI.updateAiConfig) {
         try {
@@ -385,6 +412,8 @@ class SettingsModal {
         await window.AppSettings.set('maxSteps', maxSteps);
         await window.AppSettings.set('autocompleteEnabled', autocompleteEnabled);
         await window.AppSettings.set('autocompleteDelay', autocompleteDelay);
+        await window.AppSettings.set('agentMaxTokens', agentMaxTokens);
+        await window.AppSettings.set('agentAllowOutsideWorkspace', agentAllowOutsideWorkspace);
       }
 
       this._setMsg('✓ Saved', 'success');

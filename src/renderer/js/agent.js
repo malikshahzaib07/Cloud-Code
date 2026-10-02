@@ -112,6 +112,32 @@ const TOOL_TITLES = {
   edit_file: 'Edit file', write_file: 'Write file', run_command: 'Run command'
 };
 
+/**
+ * Parse a line range emitted by a local model: "10-40", "10:", 25,
+ * { start: 1, end: 40 }, [1, 40] …  Returns { start, end } or null.
+ */
+function parseLineRange(v) {
+  if (v === undefined || v === null || v === '') return null;
+  if (typeof v === 'number' && isFinite(v)) return { start: Math.max(1, Math.floor(v)), end: undefined };
+  if (Array.isArray(v)) {
+    const s = Number(v[0]);
+    const e = Number(v[1]);
+    return isFinite(s) ? { start: Math.max(1, Math.floor(s)), end: isFinite(e) && e > 0 ? Math.floor(e) : undefined } : null;
+  }
+  if (typeof v === 'object') {
+    const s = Number(v.start || v.from || v.start_line || v.startLine || 1);
+    const e = Number(v.end || v.to || v.end_line || v.endLine || 0);
+    return isFinite(s) ? { start: Math.max(1, Math.floor(s)), end: isFinite(e) && e > 0 ? Math.floor(e) : undefined } : null;
+  }
+  if (typeof v === 'string') {
+    const m = v.match(/(\d+)\s*(?:[-–:]|to)\s*(\d+)/i);
+    if (m) return { start: Math.max(1, parseInt(m[1], 10)), end: parseInt(m[2], 10) };
+    const n = parseInt(v.trim(), 10);
+    if (isFinite(n)) return { start: Math.max(1, n), end: undefined };
+  }
+  return null;
+}
+
 class AgentController {
   constructor() {
     this.messages = [];          // conversation including system prompt + tool traffic
@@ -318,31 +344,77 @@ class AgentController {
       case 'high': thinkLine = 'Reasoning effort: HIGH — plan carefully, verify your work with tools before answering, and consider edge cases.'; break;
       default: thinkLine = 'Reasoning effort: MEDIUM — brief deliberation, then act.';
     }
-    return `You are Cloud Code Agent, an expert autonomous software engineer working inside the user's IDE on their machine.
+    const allowOutside = !!(window.AppSettings && window.AppSettings.get('agentAllowOutsideWorkspace'));
+    const outsideNote = allowOutside
+      ? '- Outside-workspace access is ENABLED: absolute paths are accepted, but prefer workspace-relative paths.'
+      : '- Access is limited to this workspace: absolute paths and "../" escapes are rejected.';
+    return `You are Cloud Code Agent, an expert software engineer working inside the user's IDE on the user's own machine.
 
-Workspace root: ${root}
-Date: ${today}
+## ENVIRONMENT
+- Workspace root: ${root}
+- Today's date: ${today}
+- Platform: Windows. run_command executes PowerShell in the workspace root.
+- ${outsideNote}
+- Every path you pass to a tool is RELATIVE to the workspace root, e.g. "src/main.js"; use "." for the root.
 
-You act ONLY through the provided tools: list_dir, read_file, search_code, edit_file, write_file, run_command.
+## YOUR JOB
+Understand the codebase, make exactly the change that was asked for, then verify it.
+You can only learn about this project through your tools — never assume what a file contains.
 
-Rules:
-1. Investigate before acting. Use list_dir / read_file / search_code to understand the codebase. Never guess file contents.
-2. Prefer edit_file (exact string replacement with enough context to be unique) over write_file for existing files. write_file completely overwrites a file — use it only for new files or deliberate full rewrites.
-3. All paths are relative to the workspace root.
-4. Keep changes minimal and match the project's existing style (indentation, naming, imports, error handling).
-5. The user may approve or reject each mutating action. A rejection is final — do not repeat that exact action; ask or choose another approach.
-6. Tool results can contain errors. Read them carefully, correct your approach, and never repeat a failing call unchanged.
-7. You may run tests/lint via run_command to verify your work (shell commands can require user approval).
-8. When the task is complete, STOP calling tools and reply with a concise summary: what you changed (files + why) and any commands you ran.
+## TOOLS (use these exact names and argument names)
+1. list_dir   {"path":"<dir>"} — list a folder ("." = workspace root).
+2. read_file  {"path":"<file>"} — read a whole file.
+              {"path":"<file>","start_line":10,"end_line":60} — read only a line range (use for big files).
+3. search_code {"query":"<text>"} — search every file in the workspace; optional {"glob":"*.js"} and {"regex":true}.
+4. edit_file  {"path":"<file>","old_string":"<exact text that exists>","new_string":"<replacement>","replace_all":false}
+5. write_file {"path":"<file>","content":"<the complete file content>"} — create a file, or deliberately overwrite one.
+6. run_command {"command":"<powershell command>"} — run a shell command in the workspace root.
 
-If native function calling is unavailable in your responses, use this exact text protocol — output ONLY one block per turn, then wait for the result:
-<<<TOOL>>>
-{"name":"tool_name","args":{...}}
-<<<END>>>
+## MANDATORY WORKFLOW
+1. ORIENT  — list_dir the relevant folder before guessing a path.
+2. READ    — read_file every file you intend to change.
+3. PLAN    — choose the smallest change that satisfies the request.
+4. ACT     — edit_file for existing files, write_file for new files.
+5. VERIFY  — read_file the changed region again, or run the project's tests/lint/build.
+6. REPORT  — stop calling tools and summarise what you changed.
+
+Call ONE tool per turn and wait for its result before deciding the next step.
+
+## CREATING FILES (this is the most common failure — read carefully)
+- Create files with write_file containing the FULL content. Any missing folders in the path are created automatically, so "src/components/Button.js" works even when src/components does not exist yet.
+- NEVER create a file with run_command redirection (">" or ">>"). Always use write_file.
+- Keep files small (under ~200 lines). For a longer file: write_file the first part, then extend it with edit_file.
+- New code must match the project's existing style: indentation, quote style, semicolons, import style, naming.
+
+## EDITING FILES SAFELY
+- old_string must match the file exactly, including indentation and newlines, and must be unique — include 2-3 surrounding lines of context when the text appears more than once.
+- Prefer edit_file for existing files; write_file replaces the whole file.
+- After editing, read the file again to confirm the change landed correctly.
+
+## RUNNING COMMANDS
+- PowerShell syntax: Get-ChildItem, Select-String, npm test, git status, git diff.
+- The command already starts in the workspace root — never cd first.
+- Use run_command to verify your work and to inspect state (git status, git diff, test output).
+- Never run destructive commands (del /s, Remove-Item -Recurse, git reset --hard, git clean, format) unless the user explicitly asked.
+
+## RULES
+- Keep changes minimal and consistent with the surrounding code.
+- Every mutating action is approved by the user. A rejection is final: do not repeat it — adapt or ask.
+- Tool results can contain errors. Read them, correct your approach, never repeat a failing call unchanged.
+- Never claim something works unless a tool verified it.
+- Do not create README/notes/summary files unless asked.
 
 ${thinkLine}
 
-Respond in the user's language.`;
+## WHEN THE TASK IS DONE
+Stop calling tools and reply with a short summary: which files changed and why, plus any commands you ran.
+
+If native function calling is unavailable in your responses, output ONLY this block, then wait for the result:
+<<<TOOL>>>
+{"name":"tool_name","args":{"path":"src/main.js"}}
+<<<END>>>
+
+Respond in the user's language, but keep code, paths and identifiers exactly as written.`;
   }
 
   formatAssistantTurn(res, content, toolCalls) {
@@ -394,7 +466,7 @@ Respond in the user's language.`;
           messages: this.messages,
           tools: this.useNativeTools ? AGENT_TOOLS : undefined,
           temperature: 0.2,
-          maxTokens: 2048
+          maxTokens: this.maxTokens()
         });
       } catch (err) {
         res = { error: err && err.message ? err.message : String(err) };
@@ -452,7 +524,7 @@ Respond in the user's language.`;
   // ==========================================================================
   async executeToolCall(tc) {
     const name = tc.name;
-    const args = tc.arguments || {};
+    const args = this.normalizeArgs(name, tc.arguments || {});
     const card = this.renderToolCard(name, args);
 
     if (!AGENT_TOOLS.some((t) => t.function.name === name)) {
@@ -1009,8 +1081,97 @@ Respond in the user's language.`;
 
     const inWorkspace = out.toLowerCase() === root.toLowerCase() ||
       out.toLowerCase().startsWith(root.toLowerCase() + '/');
-    if (!inWorkspace) throw new Error(`Path is outside the workspace: ${p}`);
+    const allowOutside = !!(window.AppSettings && window.AppSettings.get('agentAllowOutsideWorkspace'));
+    if (!inWorkspace && !allowOutside) {
+      throw new Error(
+        `Path is outside the workspace: ${p}\n` +
+        'All paths must be relative to the workspace root. To work on files outside ' +
+        'it, the user can enable "Allow agent outside workspace" in Settings.'
+      );
+    }
     return out;
+  }
+
+  /**
+   * Small local models are loose with argument names (path vs file vs filename,
+   * content vs text, ...) and sometimes emit JSON that got truncated. Normalise
+   * the common aliases + coerce stringly-typed booleans/numbers so a tool call
+   * is never lost over a cosmetic mismatch.
+   */
+  normalizeArgs(name, args) {
+    const a = (args && typeof args === 'object' && !Array.isArray(args))
+      ? Object.assign({}, args)
+      : {};
+
+    // Some models nest the payload or stringify it.
+    if (typeof a.arguments === 'string') {
+      try {
+        const parsed = JSON.parse(a.arguments);
+        if (parsed && typeof parsed === 'object') Object.assign(a, parsed);
+      } catch (e) {
+        // truncated / invalid JSON — leave as-is
+      }
+      delete a.arguments;
+    } else if (a.arguments && typeof a.arguments === 'object') {
+      Object.assign(a, a.arguments);
+    }
+
+    const pick = (...keys) => {
+      for (const k of keys) {
+        if (a[k] !== undefined && a[k] !== null && a[k] !== '') return a[k];
+      }
+      return undefined;
+    };
+
+    const path = pick('path', 'file', 'file_path', 'filePath', 'filename', 'file_name',
+      'target', 'dir', 'directory', 'folder', 'filepath');
+    if (path !== undefined && a.path === undefined) a.path = path;
+
+    const content = pick('content', 'text', 'contents', 'body', 'code', 'new_content', 'newContent');
+    if (content !== undefined && a.content === undefined) a.content = content;
+
+    const oldStr = pick('old_string', 'oldString', 'old_text', 'oldText', 'old',
+      'find', 'search_for', 'searchFor', 'target_text', 'targetText', 'original');
+    if (oldStr !== undefined && a.old_string === undefined) a.old_string = oldStr;
+
+    const newStr = pick('new_string', 'newString', 'new_text', 'newText', 'new',
+      'replace', 'replacement', 'replaced', 'with');
+    if (newStr !== undefined && a.new_string === undefined) a.new_string = newStr;
+
+    if (name === 'search_code') {
+      const query = pick('query', 'q', 'pattern', 'needle', 'search', 'search_text', 'text_to_find');
+      if (query !== undefined && a.query === undefined) a.query = query;
+    }
+
+    const command = pick('command', 'cmd', 'shell_command', 'shellCommand', 'script', 'run');
+    if (command !== undefined && a.command === undefined) a.command = command;
+
+    // stringly-typed booleans
+    for (const k of ['replace_all', 'replaceAll', 'regex', 'case_sensitive', 'caseSensitive']) {
+      if (typeof a[k] === 'string') a[k] = /^(true|yes|1)$/i.test(a[k].trim());
+    }
+    if (a.replace_all === undefined && a.replaceAll !== undefined) a.replace_all = a.replaceAll;
+
+    // stringly-typed line numbers
+    for (const k of ['start_line', 'startLine', 'end_line', 'endLine']) {
+      if (typeof a[k] === 'string' && /^\d+$/.test(a[k].trim())) a[k] = parseInt(a[k], 10);
+    }
+    if (a.start_line === undefined && a.startLine === undefined && a.lines !== undefined) {
+      const r = parseLineRange(a.lines);
+      if (r) {
+        a.start_line = r.start;
+        if (r.end !== undefined) a.end_line = r.end;
+      }
+    }
+    return a;
+  }
+
+  /** Token budget for one agent turn (longer file writes need headroom). */
+  maxTokens() {
+    const v = window.AppSettings ? window.AppSettings.get('agentMaxTokens') : 0;
+    const n = parseInt(v, 10);
+    if (!isFinite(n) || n < 512) return 4096;
+    return Math.min(16384, n);
   }
 
   diffSummary(oldText, newText) {

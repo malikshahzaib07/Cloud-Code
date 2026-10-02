@@ -34,6 +34,8 @@ const DEFAULT_SETTINGS = {
   maxSteps: 15,                // agent loop iteration cap
   autocompleteEnabled: true,   // ghost-text inline completions
   autocompleteDelay: 350,      // ms of idle before requesting a completion
+  agentAllowOutsideWorkspace: false, // allow the agent to touch files outside the workspace
+  agentMaxTokens: 4096,        // token budget per agent turn (long file writes)
   aiBaseUrl: null,             // overrides .env.local when set
   aiApiKey: null,
   aiModel: null
@@ -326,6 +328,73 @@ ipcMain.on('terminal:resize', (event, cols, rows) => {
 app.on('before-quit', () => {
   killTerminal();
 });
+
+/**
+ * Parse the JSON payload of a <<<TOOL>>> block.
+ * Self-hosted coder models wrap the JSON in code fences, emit trailing commas or
+ * comments, and get truncated by the token limit while writing long files — all
+ * of which used to silently drop the tool call. Recover from each case.
+ */
+function parseToolPayload(raw) {
+  if (!raw) return null;
+  let text = String(raw).trim();
+  text = text.replace(/^```(?:json|jsonc)?\s*/i, '').replace(/```\s*$/, '').trim();
+  text = text.replace(/\/\*[\s\S]*?\*\//g, '');           // block comments
+  text = text.replace(/(^|[\s{[,])\/\/[^\n]*/g, '$1');    // line comments
+  text = text.replace(/,\s*([}\]])/g, '$1');              // trailing commas
+
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // fall through to repair
+  }
+
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+
+  // Keep the longest balanced {...} prefix.
+  let depth = 0, inStr = false, esc = false, end = -1;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\') { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+  }
+
+  let core = end === -1 ? text.slice(start) : text.slice(start, end);
+  core = core.replace(/,\s*$/, '');
+
+  const opens = (core.match(/[{[]/g) || []).length;
+  const closes = (core.match(/[}\]]/g) || []).length;
+  const unclosedString = (() => {
+    let s = false, e2 = false;
+    for (let i = 0; i < core.length; i++) {
+      const ch = core[i];
+      if (e2) { e2 = false; continue; }
+      if (ch === '\\') { e2 = true; continue; }
+      if (ch === '"') s = !s;
+    }
+    return s;
+  })();
+
+  const attempts = [];
+  if (unclosedString) attempts.push(core + '"');
+  const padded = core + (unclosedString ? '"' : '') + '}'.repeat(Math.max(0, opens - closes));
+  attempts.push(padded);
+  attempts.push('{"name":"write_file","args":' + padded); // payload truncated at top level
+
+  for (const candidate of attempts) {
+    try {
+      return JSON.parse(candidate);
+    } catch (e2) {
+      // try the next repair
+    }
+  }
+  return null;
+}
 
 // AI Assistant handlers (Direct HTTPS request handling with SSE parsing)
 ipcMain.handle('ai:getConfig', () => {
@@ -809,15 +878,20 @@ function requestChatOnce(id, payload, includeTools) {
             if (!toolCalls.length) {
               const m = content.match(/<<<TOOL>>>\s*([\s\S]*?)\s*<<<END>>>/);
               if (m) {
-                try {
-                  const j = JSON.parse(m[1]);
+                const j = parseToolPayload(m[1]);
+                if (j) {
                   toolCalls.push({
                     id: `fb_${toolCalls.length}`,
                     name: j.name || j.tool || '',
-                    arguments: j.args || j.arguments || {}
+                    arguments: j.args || j.arguments || j.parameters || {}
                   });
                   content = content.replace(m[0], '').trim();
-                } catch (e) { /* keep raw content */ }
+                } else {
+                  // Unparseable payload — tell the model instead of going quiet.
+                  content = content.replace(m[0], '').trim() +
+                    '\n\n⚠ Your tool call could not be parsed as JSON. Reply with ONLY:\n' +
+                    '<<<TOOL>>>\n{"name":"tool_name","args":{...}}\n<<<END>>>';
+                }
               }
             }
 

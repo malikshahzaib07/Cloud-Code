@@ -14,6 +14,7 @@ class TerminalManager {
     this.fitAddon = null;
     this.cwd = null;
     this.alive = false;
+    this._lastCwd = null;
     this.api = window.electronAPI || null;
     this.boot();
   }
@@ -121,16 +122,17 @@ class TerminalManager {
 
     this.term.open(this.container);
 
-    // Size the grid, then start a shell that matches it.
+    // Size the grid, then start a shell only if a workspace folder is open.
     this.fit();
-    this.startShell(this.cwd);
+    this._syncCwd();
     setTimeout(() => { this.fit(); this.term && this.term.focus(); }, 80);
 
     // keystrokes -> PTY
     this.term.onData((data) => {
       if (!this.alive) {
-        // The shell exited: any key restarts it (like VS Code's "press any key").
-        this.startShell(this.cwd);
+        // The shell exited (or was never started): bring it back if allowed.
+        this._syncCwd();
+        if (!this.alive) return; // no folder open yet — don't spawn a shell
       }
       if (this.api && this.api.sendTerminalInput) this.api.sendTerminalInput(data);
     });
@@ -160,9 +162,6 @@ class TerminalManager {
       });
     }
 
-    this.alive = true;
-
-    // Keep the PTY in sync when the panel/container is resized.
     if (typeof ResizeObserver !== 'undefined') {
       try {
         this._ro = new ResizeObserver(() => this.fit());
@@ -182,6 +181,7 @@ class TerminalManager {
     if (cwd) this.cwd = cwd;
     if (!this.term || !this.api || !this.api.startTerminal) return;
     this.alive = true;
+    this._lastCwd = this.cwd;
     this.api.startTerminal(this.cwd, { cols: this.term.cols, rows: this.term.rows });
   }
 
@@ -193,6 +193,28 @@ class TerminalManager {
       const quoted = String(dir).replace(/'/g, "'\\''");
       // `cd` works in PowerShell (alias of Set-Location) and in POSIX shells.
       this.api.sendTerminalInput("cd '" + quoted + "'\r");
+      this._lastCwd = dir;
+      return;
+    }
+    this.startShell(dir);
+  }
+
+  /**
+   * A terminal session only starts once a folder has been selected — the user
+   * asked for the IDE to open empty, so don't spawn a shell in the home dir.
+   */
+  _syncCwd() {
+    const dir = (window.explorer && window.explorer.rootPath) || this.cwd || null;
+    if (this.alive) {
+      if (dir && dir !== this._lastCwd) this.cd(dir);
+      return;
+    }
+    if (!dir) {
+      if (this.term) {
+        this.term.write(
+          '\x1b[90mNo folder open — press Ctrl+O to choose a folder and start a shell here.\x1b[0m\r\n'
+        );
+      }
       return;
     }
     this.startShell(dir);

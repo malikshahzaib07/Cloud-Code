@@ -170,18 +170,26 @@ class FileExplorer {
       alert('Please open a folder first!');
       return;
     }
-    const name = prompt('Enter new file name:');
+    // NOTE: Electron does not implement window.prompt(), so we use our own dialog.
+    const name = await this.askName('New file name', '');
     if (!name) return;
 
-    const filePath = `${this.rootPath}/${name}`.replace(/\\/g, '/');
+    const clean = this.normalizeRelative(name);
+    if (!clean) {
+      alert('Invalid file name. Use a path inside the workspace, e.g. src/app.js');
+      return;
+    }
+
+    const filePath = `${this.rootPath}/${clean}`.replace(/\\/g, '/');
     try {
+      // Nested paths ("src/utils/x.js") need their folders created first.
+      const slash = filePath.lastIndexOf('/');
+      if (slash > 0) await window.electronAPI.createDirectory(filePath.slice(0, slash));
       await window.electronAPI.createFile(filePath);
       await this.render();
-      if (window.editor) {
-        window.editor.openFile(filePath, '');
-      }
+      if (window.editor) window.editor.openFile(filePath, '');
     } catch (err) {
-      alert('Error creating file: ' + err.message);
+      alert('Error creating file: ' + ((err && err.message) || err));
     }
   }
 
@@ -190,16 +198,86 @@ class FileExplorer {
       alert('Please open a folder first!');
       return;
     }
-    const name = prompt('Enter new folder name:');
+    const name = await this.askName('New folder name', '');
     if (!name) return;
 
-    const dirPath = `${this.rootPath}/${name}`.replace(/\\/g, '/');
+    const clean = this.normalizeRelative(name);
+    if (!clean) {
+      alert('Invalid folder name. Use a path inside the workspace, e.g. src/components');
+      return;
+    }
+
+    const dirPath = `${this.rootPath}/${clean}`.replace(/\\/g, '/');
     try {
       await window.electronAPI.createDirectory(dirPath);
       await this.render();
     } catch (err) {
-      alert('Error creating folder: ' + err.message);
+      alert('Error creating folder: ' + ((err && err.message) || err));
     }
+  }
+
+  /** Normalise a user-entered relative path (no escapes, no absolute paths). */
+  normalizeRelative(name) {
+    const parts = String(name).trim().replace(/\\/g, '/').split('/');
+    const kept = [];
+    for (const part of parts) {
+      const p = part.trim();
+      if (!p || p === '.') continue;
+      if (p === '..') return ''; // no escaping the workspace
+      kept.push(p);
+    }
+    return kept.join('/');
+  }
+
+  /**
+   * VS Code-style single-line input. Electron has no window.prompt(), so the
+   * explorer used to silently do nothing when New File / New Folder was clicked.
+   */
+  askName(title, defaultValue) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'cc-dialog-overlay';
+      overlay.innerHTML = `
+        <div class="cc-dialog" role="dialog" aria-modal="true">
+          <div class="cc-dialog-title"></div>
+          <input class="cc-dialog-input" type="text" spellcheck="false" />
+          <div class="cc-dialog-hint">Sub-folders are created automatically, e.g. src/utils/helpers.js</div>
+          <div class="cc-dialog-actions">
+            <button class="cc-dialog-btn" type="button" data-act="cancel">Cancel</button>
+            <button class="cc-dialog-btn primary" type="button" data-act="ok">Create</button>
+          </div>
+        </div>`;
+      overlay.querySelector('.cc-dialog-title').textContent = title;
+      const input = overlay.querySelector('.cc-dialog-input');
+      input.value = defaultValue || '';
+      document.body.appendChild(overlay);
+      setTimeout(() => { input.focus(); input.select(); }, 30);
+
+      let settled = false;
+      const done = (value) => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKey, true);
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(value);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault(); e.stopPropagation();
+          done(null);
+        } else if (e.key === 'Enter') {
+          e.preventDefault(); e.stopPropagation();
+          done(input.value.trim() || null);
+        }
+      };
+      document.addEventListener('keydown', onKey, true);
+
+      overlay.addEventListener('click', (e) => {
+        const act = e.target && e.target.getAttribute ? e.target.getAttribute('data-act') : null;
+        if (act === 'ok') return done(input.value.trim() || null);
+        if (act === 'cancel' || e.target === overlay) return done(null);
+      });
+    });
   }
 }
 
