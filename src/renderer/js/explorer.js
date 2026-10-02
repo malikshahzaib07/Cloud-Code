@@ -7,19 +7,52 @@ class FileExplorer {
   }
 
   async openFolder(folderPath) {
+    // No path given -> show the native folder picker.
     if (!folderPath && window.electronAPI) {
-      folderPath = await window.electronAPI.openDirectory();
+      try {
+        folderPath = await window.electronAPI.openDirectory();
+      } catch (e) {
+        alert('Could not open the folder picker:\n' + ((e && e.message) || e));
+        return;
+      }
     }
-    if (!folderPath) return;
+    if (!folderPath) return; // user cancelled
 
     this.rootPath = folderPath;
     this.expandedDirs.clear();
     this.expandedDirs.add(folderPath);
+
+    const name = String(folderPath).split(/[\\/]/).filter(Boolean).pop() || String(folderPath);
+
+    // The "no folder open" screen must disappear as soon as a folder is opened.
+    const empty = document.getElementById('empty-state');
+    if (empty) empty.style.display = 'none';
+
+    // VS Code-style: folder name in the Explorer header and the window title.
+    const header = document.querySelector('#explorer-view .sidebar-header > span');
+    if (header) header.textContent = name.toUpperCase();
+    const title = document.getElementById('active-file-title');
+    if (title) title.textContent = name;
+
+    // Re-index files for the command palette / @-mentions / agent.
+    try { if (window.palette && window.palette.refreshFiles) window.palette.refreshFiles(); } catch (e) {}
+
     await this.render();
+
+    // Point the terminal at the new workspace root (reuse the live shell).
+    try { if (window.terminal && window.terminal.cd) window.terminal.cd(folderPath); } catch (e) {}
   }
 
   async render() {
     if (!this.rootPath) {
+      // Back to the empty IDE: restore the "no folder" screen and labels.
+      const empty = document.getElementById('empty-state');
+      if (empty) empty.style.display = '';
+      const header = document.querySelector('#explorer-view .sidebar-header > span');
+      if (header) header.textContent = 'EXPLORER';
+      const title = document.getElementById('active-file-title');
+      if (title) title.textContent = 'Cloud Code - AI Code Editor';
+
       this.container.innerHTML = `
         <div style="padding: 20px 16px; text-align: center; color: var(--text-secondary);">
           <p style="margin-bottom: 12px;">No folder opened</p>

@@ -207,51 +207,124 @@ ipcMain.handle('fs:renamePath', async (event, oldPath, newPath) => {
   return true;
 });
 
-// Terminal handlers using interactive PowerShell spawn
-let ptyProcess = null;
-ipcMain.on('terminal:start', (event, cwd) => {
+// ---------------------------------------------------------------------------
+// Terminal — a REAL pseudo-terminal via node-pty (ConPTY on Windows).
+// This gives full ANSI colour, PSReadLine, working Ctrl+C/Ctrl+L/arrow keys and
+// full-screen programs (vim, htop, git log -p). If node-pty cannot be loaded we
+// degrade to a plain piped shell rather than losing the terminal.
+// ---------------------------------------------------------------------------
+let ptyProcess = null;   // node-pty process
+let pipedProc = null;    // fallback child_process
+
+function loadPty() {
+  const candidates = [
+    'node-pty',
+    path.join(app.getAppPath(), 'node_modules', 'node-pty'),
+    path.join(__dirname, '../../node_modules', 'node-pty')
+  ];
+  for (const c of candidates) {
+    try {
+      return require(c);
+    } catch (e) {
+      // try the next candidate
+    }
+  }
+  console.warn('node-pty unavailable — falling back to a basic shell.');
+  return null;
+}
+
+function shellSpec() {
+  if (process.platform === 'win32') {
+    return { file: 'powershell.exe', args: ['-NoLogo'] };
+  }
+  return { file: process.env.SHELL || '/bin/bash', args: ['-l'] };
+}
+
+function killTerminal() {
   if (ptyProcess) {
-    try { ptyProcess.kill(); } catch (e) {}
+    try { ptyProcess.kill(); } catch (e) { /* already gone */ }
     ptyProcess = null;
   }
+  if (pipedProc) {
+    try { pipedProc.kill(); } catch (e) { /* already gone */ }
+    pipedProc = null;
+  }
+}
 
-  const isWin = os.platform() === 'win32';
-  const shell = isWin ? 'powershell.exe' : (process.env.SHELL || 'bash');
-  const targetCwd = cwd && fs.existsSync(cwd) ? cwd : (process.env.USERPROFILE || process.env.HOME || process.cwd());
+const sendTerminal = (channel, payload) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+};
 
+ipcMain.on('terminal:start', (event, cwd, size) => {
+  killTerminal();
+
+  const cols = (size && Number(size.cols)) || 80;
+  const rows = (size && Number(size.rows)) || 24;
+  const targetCwd = cwd && fs.existsSync(cwd) ? cwd : (app.getPath('home') || os.homedir() || process.cwd());
+
+  // 1) Real PTY -------------------------------------------------------
+  const pty = loadPty();
+  if (pty) {
+    try {
+      const spec = shellSpec();
+      ptyProcess = pty.spawn(spec.file, spec.args, {
+        name: 'xterm-256color',
+        cols: cols,
+        rows: rows,
+        cwd: targetCwd,
+        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
+      });
+      ptyProcess.onData((data) => sendTerminal('terminal:data', data));
+      ptyProcess.onExit(({ exitCode, signal }) => {
+        ptyProcess = null;
+        sendTerminal('terminal:exit', { code: exitCode, signal: signal || null });
+      });
+      return;
+    } catch (err) {
+      console.error('PTY spawn failed, falling back to piped shell:', err);
+      ptyProcess = null;
+    }
+  }
+
+  // 2) Fallback: piped child process ----------------------------------
   try {
-    ptyProcess = spawn(shell, isWin ? ['-NoLogo'] : [], {
+    const isWin = os.platform() === 'win32';
+    pipedProc = spawn(isWin ? 'powershell.exe' : (process.env.SHELL || 'bash'), isWin ? ['-NoLogo'] : [], {
       cwd: targetCwd,
       env: { ...process.env, TERM: 'xterm-256color' },
       shell: false
     });
-
-    ptyProcess.stdout.on('data', (data) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('terminal:data', data.toString());
-      }
-    });
-
-    ptyProcess.stderr.on('data', (data) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('terminal:data', data.toString());
-      }
-    });
-
-    ptyProcess.on('exit', (code) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('terminal:data', `\r\n[Process completed with code ${code}]\r\n`);
-      }
+    pipedProc.stdout.on('data', (data) => sendTerminal('terminal:data', data.toString()));
+    pipedProc.stderr.on('data', (data) => sendTerminal('terminal:data', data.toString()));
+    pipedProc.on('exit', (code) => {
+      pipedProc = null;
+      sendTerminal('terminal:exit', { code: code, signal: null });
     });
   } catch (err) {
     console.error('Failed to spawn shell:', err);
+    sendTerminal('terminal:data', '\r\n\x1b[31mFailed to start a shell: ' + (err.message || err) + '\x1b[0m\r\n');
   }
 });
 
 ipcMain.on('terminal:input', (event, data) => {
-  if (ptyProcess && ptyProcess.stdin && !ptyProcess.stdin.destroyed) {
-    ptyProcess.stdin.write(data);
+  if (ptyProcess) {
+    try { ptyProcess.write(data); } catch (e) { /* shell closed */ }
+  } else if (pipedProc && pipedProc.stdin && !pipedProc.stdin.destroyed) {
+    pipedProc.stdin.write(data);
   }
+});
+
+// Tell the PTY when xterm's grid size changes (so full-screen programs redraw).
+ipcMain.on('terminal:resize', (event, cols, rows) => {
+  const c = Math.max(20, Number(cols) || 80);
+  const r = Math.max(5, Number(rows) || 24);
+  if (ptyProcess && typeof ptyProcess.resize === 'function') {
+    try { ptyProcess.resize(c, r); } catch (e) { /* ignore */ }
+  }
+});
+
+app.on('before-quit', () => {
+  killTerminal();
 });
 
 // AI Assistant handlers (Direct HTTPS request handling with SSE parsing)

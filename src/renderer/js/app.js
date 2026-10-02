@@ -82,6 +82,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelectorAll('.activity-icon[data-panel-toggle="ai"]').forEach((icon) => {
       icon.classList.toggle('active', !agentPanel.classList.contains('hidden'));
     });
+
+    // Drag handle on the panel's left edge to resize it.
+    const resizer = document.createElement('div');
+    resizer.id = 'agent-resizer';
+    resizer.title = 'Drag to resize the agent panel';
+    agentPanel.appendChild(resizer);
+
+    let dragging = false;
+    resizer.addEventListener('mousedown', (e) => {
+      dragging = true;
+      resizer.classList.add('dragging');
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      // The panel is docked right, so its width is the gap to the window edge.
+      const width = Math.min(720, Math.max(260, window.innerWidth - e.clientX));
+      agentPanel.style.width = width + 'px';
+      if (window.terminal && window.terminal.fit) window.terminal.fit();
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove('dragging');
+      if (window.editor && typeof window.editor.relayout === 'function') window.editor.relayout();
+      if (window.terminal && window.terminal.fit) window.terminal.fit();
+    });
   }
 
   // "Open Folder" button on the empty state.

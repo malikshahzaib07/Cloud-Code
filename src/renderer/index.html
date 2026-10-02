@@ -85,7 +85,46 @@
         <div id="search-view" class="sidebar-view"></div>
       </div><!-- /#sidebar -->
 
-      <!-- Agent Panel (left side, toggleable with Ctrl+Shift+A) -->
+      
+      <!-- Editor Container -->
+      <div id="editor-container">
+        <!-- Open Tabs Bar -->
+        <div id="tabs-bar"></div>
+
+        <!-- Monaco Host Element -->
+        <div id="monaco-host">
+          <div id="empty-state">
+            <svg viewBox="0 0 16 16" width="64" height="64" fill="#333333">
+              <path d="M14.5 3.5l-3-2a.5.5 0 0 0-.5 0L1.5 7.5a.5.5 0 0 0 0 .9l9.5 6a.5.5 0 0 0 .5 0l3-2a.5.5 0 0 0 .2-.4v-8.5a.5.5 0 0 0-.2-.5zM11 11.2L4.3 8 11 4.8v6.4z"/>
+            </svg>
+            <div style="font-size: 16px; font-weight: 500; color: #888;">Cloud Code AI</div>
+            <div class="empty-subtitle">No folder open — choose a folder to start working</div>
+            <button class="empty-open-btn" id="empty-open-folder-btn" type="button">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 14.5 4H7.414l-1.707-1.707A1 1 0 0 0 5 2H1.5z"/></svg>
+              <span>Open Folder</span>
+              <kbd>Ctrl+O</kbd>
+            </button>
+            <div class="shortcuts">
+              <div><kbd>Ctrl + Shift + P</kbd> Command Palette</div>
+              <div><kbd>Ctrl + P</kbd> Quick Open File</div>
+              <div><kbd>Ctrl + K</kbd> Inline AI Edit</div>
+              <div><kbd>Ctrl + S</kbd> Save File</div>
+              <div><kbd>Ctrl + `</kbd> Toggle Terminal</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom Panel (Terminal) -->
+        <div id="bottom-panel">
+          <div class="panel-tabs">
+            <div class="panel-tab active" data-tab="terminal">TERMINAL</div>
+            <div class="panel-tab" data-tab="output">OUTPUT</div>
+            <div class="panel-tab" data-tab="problems">PROBLEMS</div>
+          </div>
+          <div id="terminal-view"></div>
+        </div>
+      </div>
+<!-- Agent Panel (right side, toggleable with Ctrl+Shift+A) -->
       <div id="agent-panel">
         <!-- AI Chat View -->
         <div id="ai-chat-view">
@@ -148,44 +187,6 @@
         </div>
       </div><!-- /#agent-panel -->
 
-      <!-- Editor Container -->
-      <div id="editor-container">
-        <!-- Open Tabs Bar -->
-        <div id="tabs-bar"></div>
-
-        <!-- Monaco Host Element -->
-        <div id="monaco-host">
-          <div id="empty-state">
-            <svg viewBox="0 0 16 16" width="64" height="64" fill="#333333">
-              <path d="M14.5 3.5l-3-2a.5.5 0 0 0-.5 0L1.5 7.5a.5.5 0 0 0 0 .9l9.5 6a.5.5 0 0 0 .5 0l3-2a.5.5 0 0 0 .2-.4v-8.5a.5.5 0 0 0-.2-.5zM11 11.2L4.3 8 11 4.8v6.4z"/>
-            </svg>
-            <div style="font-size: 16px; font-weight: 500; color: #888;">Cloud Code AI</div>
-            <div class="empty-subtitle">No folder open — choose a folder to start working</div>
-            <button class="empty-open-btn" id="empty-open-folder-btn" type="button">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 14.5 4H7.414l-1.707-1.707A1 1 0 0 0 5 2H1.5z"/></svg>
-              <span>Open Folder</span>
-              <kbd>Ctrl+O</kbd>
-            </button>
-            <div class="shortcuts">
-              <div><kbd>Ctrl + Shift + P</kbd> Command Palette</div>
-              <div><kbd>Ctrl + P</kbd> Quick Open File</div>
-              <div><kbd>Ctrl + K</kbd> Inline AI Edit</div>
-              <div><kbd>Ctrl + S</kbd> Save File</div>
-              <div><kbd>Ctrl + `</kbd> Toggle Terminal</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Bottom Panel (Terminal) -->
-        <div id="bottom-panel">
-          <div class="panel-tabs">
-            <div class="panel-tab active" data-tab="terminal">TERMINAL</div>
-            <div class="panel-tab" data-tab="output">OUTPUT</div>
-            <div class="panel-tab" data-tab="problems">PROBLEMS</div>
-          </div>
-          <div id="terminal-view"></div>
-        </div>
-      </div>
     </div>
 
     <!-- Status Bar -->

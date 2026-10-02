@@ -23,12 +23,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   settingsSet: (patch) => ipcRenderer.invoke('settings:set', patch),
 
   // Terminal
-  startTerminal: (cwd) => ipcRenderer.send('terminal:start', cwd),
+  startTerminal: (cwd, size) => ipcRenderer.send('terminal:start', cwd, size),
   sendTerminalInput: (data) => ipcRenderer.send('terminal:input', data),
+  resizeTerminal: (cols, rows) => ipcRenderer.send('terminal:resize', cols, rows),
   onTerminalData: (callback) => {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('terminal:data', listener);
     return () => ipcRenderer.removeListener('terminal:data', listener);
+  },
+  onTerminalExit: (callback) => {
+    const listener = (event, info) => callback(info);
+    ipcRenderer.on('terminal:exit', listener);
+    return () => ipcRenderer.removeListener('terminal:exit', listener);
   },
 
   // AI Assistant

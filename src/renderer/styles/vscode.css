@@ -181,21 +181,36 @@ body, html {
 }
 
 /* ============================================================================
-   Agent Panel — AI/Agent chat, docked on the LEFT between the sidebar and the
-   editor. Toggle with the robot activity icon or Ctrl+Shift+A.
+   Agent Panel — AI/Agent chat, docked on the RIGHT of the editor, so the
+   layout reads Explorer | Code | Agent (like VS Code).
+   Toggle with the robot activity icon or Ctrl+Shift+A.
    ========================================================================== */
 #agent-panel {
   width: 380px;
   min-width: 260px;
   max-width: 720px;
   background-color: var(--bg-sidebar);
-  border-right: 1px solid var(--border-color);
+  border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   position: relative;
-  /* Drag the panel's right edge to resize (needs a non-visible overflow). */
   overflow: hidden;
-  resize: horizontal;
+}
+
+/* Drag handle on the panel's left edge (built by app.js). */
+#agent-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 25;
+}
+
+#agent-resizer:hover,
+#agent-resizer.dragging {
+  background: rgba(0, 122, 204, 0.5);
 }
 
 #agent-panel.hidden {
