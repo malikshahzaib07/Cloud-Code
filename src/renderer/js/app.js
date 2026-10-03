@@ -220,12 +220,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   // The settings modal (or a restored value) can change the model without the
   // chat dropdown knowing, which used to leave the agent running the old model.
   // ---------------------------------------------------------------------------
+  let pendingModel = null;
+  let pendingAt = 0;
+  window.addEventListener('chat:model-changed', (e) => {
+    const m = e && e.detail && e.detail.model;
+    if (typeof m === 'string' && m) { pendingModel = m; pendingAt = Date.now(); }
+  });
+
   async function syncModelSelection() {
     const sel = document.getElementById('model-select');
     if (!sel || !window.electronAPI || !window.electronAPI.getAiConfig) return;
+    // Never fight a switch the user just made: give the save time to land.
+    if (pendingModel && Date.now() - pendingAt < 6000) return;
     try {
       const cfg = await window.electronAPI.getAiConfig();
-      if (!cfg || !cfg.model || sel.value === cfg.model) return;
+      if (!cfg || !cfg.model) return;
+      const cc = window.chatControls;
+      const labelStale = !!(cc && typeof cc._model === 'string' && cc._model !== cfg.model);
+      if (sel.value === cfg.model && !labelStale) { pendingModel = null; return; }
       if (!Array.prototype.some.call(sel.options, (o) => o.value === cfg.model)) {
         const opt = document.createElement('option');
         opt.value = cfg.model;
@@ -233,11 +245,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         sel.appendChild(opt);
       }
       sel.value = cfg.model;
+      // Route through the control bar so the visible label, the ✓ mark and the
+      // badge all follow — setting the proxy alone left the dropdown lying.
+      if (labelStale && cc && typeof cc.setModel === 'function') cc.setModel(cfg.model);
       try {
         window.dispatchEvent(new CustomEvent('chat:model-changed', { detail: { model: cfg.model } }));
       } catch (e) {
         // CustomEvent unavailable
       }
+      pendingModel = null;
     } catch (e) {
       // Config unavailable — leave the current selection alone.
     }

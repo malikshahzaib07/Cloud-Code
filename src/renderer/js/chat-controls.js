@@ -1225,16 +1225,42 @@
     var api = global.electronAPI;
     var current = this._model;
 
-    try {
-      if (api && typeof api.getAiConfig === 'function') {
-        var cfg = api.getAiConfig();
-        if (cfg && typeof cfg.model === 'string' && cfg.model) current = cfg.model;
+    // getAiConfig() is asynchronous (IPC). Reading it synchronously used to
+    // yield `undefined`, so the control bar booted showing the default model
+    // while the saved config held another one — the dropdown then looked like
+    // switching models "did nothing". Handle both shapes.
+    var applyCfg = function (cfg) {
+      if (!cfg || typeof cfg.model !== 'string' || !cfg.model) return false;
+      if (cfg.model === self._model) return true;
+      if (self._booted) {
+        // Full path: proxy, label, persistence, event.
+        self.setModel(cfg.model);
+      } else {
+        // Still booting: remember it and re-render so the label/proxy already
+        // show the saved model; the model list lands right after.
+        self._model = cfg.model;
+        if (typeof self._setOptions === 'function') self._setOptions([], self._modelListOk !== false);
       }
+      return true;
+    };
+
+    var raw = null;
+    try {
+      if (api && typeof api.getAiConfig === 'function') raw = api.getAiConfig();
     } catch (e) {
       console.debug('chat-controls: getAiConfig failed', e);
     }
 
-    this._model = current;
+    if (raw && typeof raw.then === 'function') {
+      // Async IPC: keep booting with what we have; the saved model is applied
+      // as soon as it arrives (and re-renders the list that follows).
+      raw.then(applyCfg).catch(function (e) {
+        console.debug('chat-controls: getAiConfig failed', e);
+      });
+    } else {
+      applyCfg(raw);
+    }
+
     // Optimistic single-entry list: the popup is never empty, even before the
     // server answers (or if it never does).
     this._setOptions([], false);
