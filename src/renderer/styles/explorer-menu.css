@@ -116,3 +116,64 @@
   background: rgba(128, 128, 128, 0.28);
   color: var(--text-active, #ffffff);
 }
+
+/* --- Popup placement ------------------------------------------------------ */
+/* Applied by explorer.js when the menu had to flip upwards near the bottom
+   edge of the viewport, so the open animation grows from the anchored edge
+   instead of the top. */
+.ctx-menu.ctx-menu-flip-up {
+  animation-name: ctx-menu-in-up;
+}
+
+@keyframes ctx-menu-in-up {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* --- Inline "could not read folder" note ---------------------------------- */
+/* Shown in place of a failed readDirectory() level. Non-blocking on purpose:
+   the already-rendered children stay on screen. */
+.explorer-read-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 14px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary, #969696);
+  font-style: italic;
+  cursor: default;
+}
+
+.explorer-read-error::before {
+  content: '\26A0'; /* warning sign */
+  font-style: normal;
+  color: var(--warning-color, #cca700);
+  opacity: 0.9;
+}
+
+/* --- Explorer header actions --------------------------------------------- */
+/* The "Open Folder" button is appended next to New File / New Folder /
+   Refresh by explorer.js; this only makes sure it lines up with its siblings
+   in both themes without touching the existing .icon-btn styling. */
+.explorer-header-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #969696);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.explorer-header-btn:hover,
+.explorer-header-btn:focus-visible {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.2));
+  color: var(--text-primary, #cccccc);
+  outline: none;
+}

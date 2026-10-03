@@ -13,6 +13,23 @@
   var MAX_FILES = 10;
   var MAX_BYTES = 400 * 1024;
 
+  // Autonomy modes — must match agent.js' `#agent-mode-select` values and
+  // settings.js' `DEFAULTS.agentMode` ('ask').
+  var AGENT_MODES = ['ask', 'edit-auto', 'full-auto'];
+  var DEFAULT_AGENT_MODE = 'ask';
+
+  var AGENT_MODE_LABELS = {
+    ask: 'Ask before changes',
+    'edit-auto': 'Auto-edit',
+    'full-auto': 'Fully auto'
+  };
+
+  var AGENT_MODE_HINTS = {
+    ask: 'Every file edit and command is confirmed before it runs (safest).',
+    'edit-auto': 'File edits apply on their own; commands still ask first.',
+    'full-auto': 'Edits and commands run without asking. Only use on throwaway work.'
+  };
+
   var THINK_LABELS = {
     off: 'Think: Off',
     low: 'Think: Low',
@@ -47,8 +64,12 @@
     return (mb >= 100 ? Math.round(mb) : Math.round(mb * 10) / 10) + ' MB';
   }
 
+  // Accepts both shapes listAiModels() may return: plain strings and
+  // `{ id }` / `{ name }` objects. De-duplicates case-insensitively while
+  // keeping the first spelling the server used.
   function normalizeModels(list) {
     var out = [];
+    var seen = Object.create(null);
     if (!list || typeof list.length !== 'number') return out;
     for (var i = 0; i < list.length; i++) {
       var item = list[i];
@@ -58,9 +79,27 @@
         if (typeof item.id === 'string' && item.id) id = item.id;
         else if (typeof item.name === 'string' && item.name) id = item.name;
       }
-      if (id && out.indexOf(id) === -1) out.push(id);
+      if (typeof id !== 'string') continue;
+      id = id.trim();
+      if (!id) continue;
+      var key = id.toLowerCase();
+      if (seen[key]) continue;
+      seen[key] = true;
+      out.push(id);
     }
     return out;
+  }
+
+  // Case-insensitive contains over the whole query (space separated terms
+  // must all match, in any order).
+  function matchesFilter(item, filter) {
+    if (!filter) return true;
+    var hay = (item.searchText || (item.value + ' ' + (item.label || ''))).toLowerCase();
+    var terms = String(filter).toLowerCase().split(/\s+/);
+    for (var i = 0; i < terms.length; i++) {
+      if (terms[i] && hay.indexOf(terms[i]) === -1) return false;
+    }
+    return true;
   }
 
   function ChatControls() {
@@ -85,6 +124,8 @@
 
     this._booted = true;
     this._openDropdown = null;
+    this._agentMode = DEFAULT_AGENT_MODE;
+    this._modelListOk = false;
     this._initMode();
     // Native <select>s become hidden, aria-hidden *proxies*: their `.value`
     // stays authoritative (agent.js + ai-assistant.js read it directly),
@@ -93,6 +134,7 @@
     this._hideProxy(this.el.model);
     this._initThink();
     this._initModel();
+    this._initAgentMode();
     this._initAttach();
     this._renderChips();
   }
@@ -115,21 +157,30 @@
      Dropdown — a VS Code quick-pick style menu (button + popup list).
      Namespaced `dd-*`. Keyboard: Enter/Space/ArrowUp/ArrowDown open,
      arrows move, Enter/Space select, Escape closes + restores focus.
+
+     With `opts.searchable` the popup grows a filter box ("Type to filter…"),
+     a scrollable list (`.dd-list`) and a "showing X of Y" footer
+     (`.dd-foot`) so an arbitrarily long list is browsable and — crucially —
+     never silently truncated.
      --------------------------------------------------------------------- */
   ChatControls.prototype._createDropdown = function (opts) {
     var self = this;
     var dd = {
       key: opts.key,
-      select: opts.select,
+      select: opts.select || null,
       items: [],
+      visible: [],
+      filter: '',
       value: '',
       activeIndex: 0,
       open: false,
-      disabled: false
+      disabled: false,
+      searchable: !!opts.searchable
     };
 
     var root = document.createElement('div');
     root.className = 'dd';
+    if (dd.searchable) root.classList.add('dd-searchable');
 
     var trigger = document.createElement('button');
     trigger.type = 'button';
@@ -148,8 +199,31 @@
     menu.setAttribute('role', 'listbox');
     menu.hidden = true;
 
+    // Filter box (searchable dropdowns only)
+    var search = null;
+    if (dd.searchable) {
+      search = document.createElement('input');
+      search.type = 'text';
+      search.className = 'dd-search';
+      search.setAttribute('placeholder', opts.searchPlaceholder || 'Type to filter…');
+      search.setAttribute('aria-label', 'Filter list');
+      search.setAttribute('autocomplete', 'off');
+      search.setAttribute('spellcheck', 'false');
+    }
+
+    var list = document.createElement('div');
+    list.className = 'dd-list';
+    list.setAttribute('role', 'presentation');
+
+    var foot = document.createElement('div');
+    foot.className = 'dd-foot';
+
     trigger.innerHTML = CARET_SVG;
     trigger.insertBefore(label, trigger.firstChild);
+
+    if (search) menu.appendChild(search);
+    menu.appendChild(list);
+    if (dd.searchable) menu.appendChild(foot);
 
     root.appendChild(trigger);
     root.appendChild(menu);
@@ -162,48 +236,95 @@
     dd.trigger = trigger;
     dd.menu = menu;
     dd.label = label;
+    dd.list = list;
+    dd.foot = foot;
+    dd.search = search;
 
     dd.setItems = function (items, selected) {
-      dd.items = items || [];
+      dd.items = (items || []).map(function (it) {
+        var item = {
+          value: it.value,
+          label: it.label || it.value,
+          hint: it.hint || ''
+        };
+        item.searchText = (item.value + ' ' + item.label).toLowerCase();
+        return item;
+      });
       if (selected != null) dd.value = selected;
-      dd.renderMenu();
+      dd.setFilter('');
       dd.sync();
     };
 
+    dd.setFilter = function (text) {
+      dd.filter = text == null ? '' : String(text);
+      if (search && search.value !== dd.filter) search.value = dd.filter;
+      dd.renderMenu();
+      if (opts.onFilter && dd.open) opts.onFilter(dd.filter, dd.visible.length, dd.items.length);
+    };
+
     dd.renderMenu = function () {
-      while (menu.firstChild) menu.removeChild(menu.firstChild);
-      var active = false;
-      dd.items.forEach(function (item, i) {
+      while (list.firstChild) list.removeChild(list.firstChild);
+      dd.visible = [];
+      for (var i = 0; i < dd.items.length; i++) {
+        if (matchesFilter(dd.items[i], dd.filter)) dd.visible.push(dd.items[i]);
+      }
+
+      var selectedRow = -1;
+      dd.visible.forEach(function (item, i) {
         var row = document.createElement('div');
         row.className = 'dd-item';
         row.setAttribute('role', 'option');
         row.dataset.index = String(i);
+        row.setAttribute('aria-selected', item.value === dd.value ? 'true' : 'false');
         var check = document.createElement('span');
         check.className = 'dd-check';
         check.setAttribute('aria-hidden', 'true');
         check.textContent = item.value === dd.value ? '✓' : '';
         var text = document.createElement('span');
         text.className = 'dd-item-label';
-        text.textContent = item.label || item.value;   // untrusted → textContent
-        if (item.hint) row.title = item.hint;
+        text.textContent = item.label;         // untrusted → textContent
         row.appendChild(check);
         row.appendChild(text);
-        if (item.value === dd.value) row.setAttribute('aria-selected', 'true');
-        if (!active && item.value === dd.value) {
-          row.classList.add('dd-item-active');
-          active = true;
-        }
+        if (item.hint) row.title = item.hint;
+        if (item.value === dd.value) selectedRow = i;
         row.addEventListener('mousedown', function (e) {
           e.preventDefault();
           dd.close(true);
-          dd.choose(i);
+          dd.chooseVisible(i);
         });
         row.addEventListener('mouseenter', function () {
           dd.setActive(i);
         });
-        menu.appendChild(row);
+        list.appendChild(row);
       });
-      dd.setActive(active ? dd.indexOfValue(dd.value) : 0);
+
+      // Never render an empty popup: say so, and keep the list navigable.
+      if (!dd.visible.length) {
+        var empty = document.createElement('div');
+        empty.className = 'dd-empty-row';
+        empty.textContent = dd.items.length
+          ? 'No matches for “' + dd.filter + '”'
+          : (opts.emptyText || 'Nothing to show');
+        list.appendChild(empty);
+      }
+
+      if (foot) {
+        var total = dd.items.length;
+        var shown = dd.visible.length;
+        foot.textContent = total === shown && !dd.filter
+          ? total + (total === 1 ? ' model' : ' models')
+          : 'showing ' + shown + ' of ' + total;
+        foot.classList.toggle('dd-foot-filtered', !!dd.filter);
+      }
+
+      dd.activeIndex = selectedRow >= 0 ? selectedRow : 0;
+      dd.setActive(dd.activeIndex);
+    };
+
+    // Index of `v` within the *currently visible* rows.
+    dd.indexOfVisible = function (v) {
+      for (var i = 0; i < dd.visible.length; i++) if (dd.visible[i].value === v) return i;
+      return -1;
     };
 
     dd.indexOfValue = function (v) {
@@ -212,10 +333,17 @@
     };
 
     dd.setActive = function (i) {
-      if (!dd.items.length) return;
-      dd.activeIndex = Math.max(0, Math.min(dd.items.length - 1, i));
-      var rows = menu.querySelectorAll ? menu.querySelectorAll('.dd-item') : [];
+      if (!dd.visible.length) { dd.activeIndex = 0; return; }
+      dd.activeIndex = Math.max(0, Math.min(dd.visible.length - 1, i));
+      var rows = list.querySelectorAll ? list.querySelectorAll('.dd-item') : [];
       for (var k = 0; k < rows.length; k++) rows[k].classList.toggle('dd-item-active', k === dd.activeIndex);
+    };
+
+    dd.scrollActiveIntoView = function () {
+      var rows = list.querySelectorAll ? list.querySelectorAll('.dd-item') : [];
+      var row = rows && rows[dd.activeIndex];
+      if (!row || typeof row.scrollIntoView !== 'function') return;
+      try { row.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ }
     };
 
     dd.sync = function () {
@@ -225,14 +353,32 @@
       trigger.classList.toggle('dd-disabled', !!dd.disabled);
       trigger.disabled = !!dd.disabled;
       trigger.setAttribute('aria-expanded', dd.open ? 'true' : 'false');
-      if (dd.select) {
-        dd.select.value = dd.value;
+      if (dd.select && dd.value) {
+        dd.syncProxy();
       }
+    };
+
+    // The proxy <select> is the value authority for agent.js / ai-assistant.js.
+    dd.syncProxy = function () {
+      var sel = dd.select;
+      if (!sel || !dd.value) return;
+      var opts2 = sel.options || [];
+      var found = false;
+      for (var i = 0; i < opts2.length; i++) {
+        if (opts2[i].value === dd.value) { found = true; break; }
+      }
+      if (!found) {
+        var o = document.createElement('option');
+        o.value = dd.value;
+        o.textContent = dd.value;
+        sel.appendChild(o);
+      }
+      sel.value = dd.value;
     };
 
     dd.display = function () {
       var it = dd.items[dd.indexOfValue(dd.value)];
-      return it ? (it.label || it.value) : (dd.value || opts.placeholder || '—');
+      return it ? it.label : (dd.value || opts.placeholder || '—');
     };
 
     dd.toggle = function () {
@@ -247,8 +393,9 @@
       dd.open = true;
       self._openDropdown = dd;
       menu.hidden = false;
-      dd.renderMenu();
+      dd.setFilter(dd.filter);
       dd.sync();
+      if (search && search.focus) search.focus();
     };
 
     dd.close = function (keepFocus) {
@@ -270,6 +417,17 @@
       }
     };
 
+    // Select by *visible* index (what the user actually clicked / arrowed to).
+    dd.chooseVisible = function (i) {
+      var item = dd.visible[i];
+      if (!item) return;
+      if (item.value !== dd.value) {
+        if (opts.onChange) opts.onChange(item.value);
+      } else {
+        dd.sync();
+      }
+    };
+
     dd.onKeydown = function (e) {
       var k = e.key;
       if (k === 'Escape') {
@@ -281,26 +439,52 @@
         if (k === 'Enter' || k === ' ' || k === 'ArrowDown' || k === 'ArrowUp') {
           e.preventDefault();
           dd.show();
-          if (k === 'ArrowUp' && dd.items.length) dd.setActive(dd.items.length - 1);
+          if (k === 'ArrowUp' && dd.visible.length) dd.setActive(dd.visible.length - 1);
         }
         return;
       }
-      if (k === 'ArrowDown') { e.preventDefault(); dd.setActive(dd.activeIndex + 1); }
-      else if (k === 'ArrowUp') { e.preventDefault(); dd.setActive(dd.activeIndex - 1); }
-      else if (k === 'Home') { e.preventDefault(); dd.setActive(0); }
-      else if (k === 'End') { e.preventDefault(); dd.setActive(dd.items.length - 1); }
-      else if (k === 'Enter' || k === ' ') { e.preventDefault(); dd.close(true); dd.choose(dd.activeIndex); }
-      else if (k === 'Tab') { dd.close(); }
+      if (k === 'ArrowDown') {
+        e.preventDefault();
+        dd.setActive(dd.activeIndex + 1);
+        dd.scrollActiveIntoView();
+      } else if (k === 'ArrowUp') {
+        e.preventDefault();
+        dd.setActive(dd.activeIndex - 1);
+        dd.scrollActiveIntoView();
+      } else if (k === 'Home' && dd.visible.length) {
+        e.preventDefault(); dd.setActive(0); dd.scrollActiveIntoView();
+      } else if (k === 'End' && dd.visible.length) {
+        e.preventDefault(); dd.setActive(dd.visible.length - 1); dd.scrollActiveIntoView();
+      } else if (k === 'PageDown') {
+        e.preventDefault(); dd.setActive(dd.activeIndex + 8); dd.scrollActiveIntoView();
+      } else if (k === 'PageUp') {
+        e.preventDefault(); dd.setActive(dd.activeIndex - 8); dd.scrollActiveIntoView();
+      } else if (k === 'Enter' || (k === ' ' && !(search && search === e.target))) {
+        e.preventDefault();
+        dd.close(true);
+        dd.chooseVisible(dd.activeIndex);
+      } else if (k === 'Tab') {
+        dd.close();
+      }
     };
 
     trigger.addEventListener('keydown', dd.onKeydown);
     trigger.addEventListener('click', function () { dd.toggle(); });
     menu.addEventListener('keydown', function (e) { dd.onKeydown(e); });
-    // Keep focus on the trigger while the popup is open so Escape/Enter work.
+    if (search) {
+      search.addEventListener('input', function () { dd.setFilter(search.value); });
+      // Clicking the filter box must not toggle the trigger.
+      search.addEventListener('click', function (e) { e.stopPropagation(); });
+      search.addEventListener('keydown', function (e) {
+        // Printable characters belong to the filter, not the menu.
+        if (e.key.length === 1 || e.key === 'Backspace') e.stopPropagation();
+      });
+    }
+    // Keep focus inside the widget while the popup is open.
     trigger.addEventListener('blur', function () {
-      if (dd.open && !root.contains) return;
-      if (dd.open && root.contains && root.contains(document.activeElement)) return;
-      if (dd.open) dd.close();
+      if (!dd.open) return;
+      if (root.contains(document.activeElement)) return;
+      dd.close();
     });
 
     dd.destroy = function () {
@@ -325,9 +509,13 @@
     global.addEventListener('resize', function () {
       if (self._openDropdown) self._openDropdown.close();
     });
-    // Scroll (capture) covers the panel resize handle + any scrollable ancestor.
-    global.document.addEventListener('scroll', function () {
-      if (self._openDropdown) self._openDropdown.close();
+    // Scroll (capture) covers the panel resize handle + any scrollable
+    // ancestor — but scrolling *inside* the popup must not close it.
+    global.document.addEventListener('scroll', function (e) {
+      var dd = self._openDropdown;
+      if (!dd) return;
+      if (e && e.target && dd.root && dd.root.contains(e.target)) return;
+      dd.close();
     }, true);
   };
 
@@ -489,6 +677,7 @@
     var self = this;
     this._initGlobalDismiss();
     this._model = DEFAULT_MODEL;
+    this._modelListOk = false;
     this.el.model.addEventListener('change', function () {
       self.setModel(self.el.model.value);
     });
@@ -496,6 +685,9 @@
       key: 'model',
       id: 'model-dd',
       select: this.el.model,
+      searchable: true,
+      searchPlaceholder: 'Type to filter models…',
+      emptyText: 'No models available',
       placeholder: DEFAULT_MODEL,
       onChange: function (v) { self.setModel(v); }
     });
@@ -517,7 +709,9 @@
     }
 
     this._model = current;
-    this._setOptions([current]);
+    // Optimistic single-entry list: the popup is never empty, even before the
+    // server answers (or if it never does).
+    this._setOptions([], false);
 
     if (!api || typeof api.listAiModels !== 'function') return;
 
@@ -533,28 +727,51 @@
       return;
     }
     p.then(function (list) {
-      // _setOptions prepends the active model itself when it is missing, so
-      // the dropdown is never empty.
-      self._setOptions(normalizeModels(list));
+      var models = normalizeModels(list);
+      // _setOptions prepends the active model itself when it is missing and
+      // never truncates, so hundreds of models render in full.
+      self._setOptions(models, models.length > 0);
     }).catch(function (e) {
       console.debug('chat-controls: listAiModels failed', e);
+      self._setOptions([], false);
     });
   };
 
-  // Rebuilds both the hidden proxy's options and the visible dropdown,
-  // keeping `current` selected even when the server didn't list it.
-  // Never produces an empty list.
-  ChatControls.prototype._setOptions = function (models) {
+  // Rebuilds both the hidden proxy's options and the visible dropdown.
+  // `ok` is false when the server list was unavailable → the popup keeps the
+  // configured model alone and says so instead of silently showing nothing.
+  ChatControls.prototype._setOptions = function (models, ok) {
     var sel = this.el.model;
     var current = this._model;
+    this._modelListOk = ok !== false;
+
+    // De-duplicate case-insensitively (normalizeModels already does, but
+    // setModel() can inject entries later).
+    var seen = Object.create(null);
     var list = [];
     (models || []).forEach(function (m) {
-      if (m && list.indexOf(m) === -1) list.push(m);
+      if (typeof m !== 'string') return;
+      m = m.trim();
+      if (!m) return;
+      var key = m.toLowerCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      list.push(m);
     });
     // Never drop the active model: prepend it if the server didn't list it.
-    if (current && list.indexOf(current) === -1) list.unshift(current);
+    var ci = seen[String(current).toLowerCase()];
+    if (current && !ci) { list.unshift(current); seen[String(current).toLowerCase()] = true; }
     if (list.length === 0) list = [current || DEFAULT_MODEL];
+    // Current model first, then alphabetical.
+    list.sort(function (a, b) {
+      if (a === current) return -1;
+      if (b === current) return 1;
+      var x = a.toLowerCase(), y = b.toLowerCase();
+      return x < y ? -1 : (x > y ? 1 : 0);
+    });
 
+    // The proxy <select> holds EVERY model — agent.js / ai-assistant.js read
+    // `.value` from it, and anything reading `.options` sees the full list.
     if (sel) {
       sel.textContent = '';
       list.forEach(function (m) {
@@ -567,15 +784,18 @@
     }
 
     if (this.modelDd) {
-      // A single-item list means the backend list is unavailable: keep the
-      // control usable but visually flag that it is not a real choice.
+      var solo = list.length < 2;
       this.modelDd.disabled = false;
-      this.modelDd.trigger.classList.toggle('dd-solo', list.length < 2);
-      this.modelDd.trigger.title = list.length < 2
-        ? 'Model list unavailable — showing the configured model (' + current + ')'
-        : 'AI model used for chat and agent requests';
+      this.modelDd.trigger.classList.toggle('dd-solo', solo);
+      this.modelDd.trigger.title = solo
+        ? 'Could not reach the model server — showing the configured model (' + current + ')'
+        : 'AI model used for chat and agent requests · ' + list.length + ' available';
       this.modelDd.setItems(list.map(function (m) {
-        return { value: m, label: m, hint: m === current ? 'Currently selected' : '' };
+        return {
+          value: m,
+          label: m,
+          hint: m === current ? 'Currently selected' : (solo ? 'Model server unreachable' : '')
+        };
       }), current);
     }
   };
@@ -584,10 +804,10 @@
     if (!this._booted || !this.el.model) return;
     if (typeof m !== 'string' || !m) return;
     this._model = m;
-    if (this.el.model.value !== m) {
-      // Option may not exist yet.
-      var found = false;
+    if (this.modelDd) this.modelDd.syncProxy();
+    else if (this.el.model) {
       var opts = this.el.model.options || [];
+      var found = false;
       for (var i = 0; i < opts.length; i++) {
         if (opts[i].value === m) { found = true; break; }
       }
@@ -618,6 +838,122 @@
       console.debug('chat-controls: updateAiConfig failed', e);
     }
     global.dispatchEvent(new CustomEvent('chat:model-changed', { detail: { model: m } }));
+  };
+
+  // --------------------------- autonomy mode --------------------------------
+  // The agent run bar owns `#agent-mode-select`; this is the same setting
+  // surfaced in the chat control bar next to think level and model. Both
+  // read/write `AppSettings.get/set('agentMode')` and stay in sync through
+  // the `agent:mode-changed` (window) and `settings-changed` (document)
+  // events.
+  ChatControls.prototype._initAgentMode = function () {
+    var self = this;
+    this._initGlobalDismiss();
+
+    this._agentMode = this._readAgentMode();
+
+    this.agentDd = this._createDropdown({
+      key: 'agentMode',
+      id: 'agent-mode-dd',
+      // No proxy <select> exists in the control bar: settings.js owns the
+      // storage, so `get/set('agentMode')` is the single source of truth.
+      select: null,
+      placeholder: AGENT_MODE_LABELS[DEFAULT_AGENT_MODE],
+      onChange: function (v) { self.setAgentMode(v, true); }
+    });
+
+    // Park it in the bar, right after the model dropdown and before 📎.
+    this.agentDd.root.classList.add('dd-mode');
+    var host = this.el.bar;
+    if (host) {
+      var anchor = this.el.attach;
+      if (anchor && anchor.parentNode === host) host.insertBefore(this.agentDd.root, anchor);
+      else host.appendChild(this.agentDd.root);
+    }
+
+    this.agentDd.setItems(AGENT_MODES.map(function (m) {
+      return { value: m, label: AGENT_MODE_LABELS[m], hint: AGENT_MODE_HINTS[m] };
+    }), this._agentMode);
+    this._syncAgentModeUi(this._agentMode);
+
+    // The run bar's own select (or anything else) can change the mode.
+    global.addEventListener('agent:mode-changed', function (e) {
+      var m = e && e.detail ? e.detail.mode : null;
+      self._syncAgentModeUi(self._normalizeAgentMode(m));
+    });
+
+    // …and so can the settings modal.
+    global.document.addEventListener('settings-changed', function () {
+      self._syncAgentModeUi(self._readAgentMode());
+    });
+  };
+
+  // Read the persisted mode (settings.js is authoritative; 'ask' if unknown).
+  ChatControls.prototype.getAgentMode = function () {
+    return this._agentMode || DEFAULT_AGENT_MODE;
+  };
+
+  ChatControls.prototype._readAgentMode = function () {
+    try {
+      var s = global.AppSettings;
+      if (s && typeof s.get === 'function') {
+        return this._normalizeAgentMode(s.get('agentMode'));
+      }
+    } catch (e) { /* fall through to the default */ }
+    return DEFAULT_AGENT_MODE;
+  };
+
+  ChatControls.prototype._normalizeAgentMode = function (v) {
+    return AGENT_MODES.indexOf(v) === -1 ? DEFAULT_AGENT_MODE : v;
+  };
+
+  // `broadcast` = the user picked here; otherwise we are mirroring a change
+  // that came from elsewhere and must not echo it back.
+  ChatControls.prototype.setAgentMode = function (mode, broadcast) {
+    if (!this._booted) return;
+    var m = this._normalizeAgentMode(mode);
+    var changed = m !== this._agentMode;
+    this._agentMode = m;
+    if (this.agentDd) {
+      this.agentDd.value = m;
+      this.agentDd.renderMenu();
+      this.agentDd.sync();
+    }
+    this._syncAgentModeUi(m);
+    if (!changed && !broadcast) return;
+    try {
+      var s = global.AppSettings;
+      if (s && typeof s.set === 'function') {
+        var r = s.set('agentMode', m);
+        if (r && typeof r.then === 'function') {
+          r.catch(function (e) { console.debug('chat-controls: save agentMode failed', e); });
+        }
+      }
+    } catch (e) { /* ignore */ }
+    if (broadcast === false) return;
+    try {
+      global.dispatchEvent(new CustomEvent('agent:mode-changed', { detail: { mode: m } }));
+    } catch (e) { /* CustomEvent unavailable */ }
+    try {
+      global.dispatchEvent(new CustomEvent('chat:agent-mode-changed', { detail: { mode: m } }));
+    } catch (e) { /* ignore */ }
+  };
+
+  // Push a mode into the visible dropdown (no writes, no re-broadcast).
+  ChatControls.prototype._syncAgentModeUi = function (mode) {
+    var m = this._normalizeAgentMode(mode);
+    this._agentMode = m;
+    if (this.agentDd) {
+      this.agentDd.value = m;
+      this.agentDd.renderMenu();
+      this.agentDd.sync();
+      var it = this.agentDd.items[this.agentDd.indexOfValue(m)];
+      this.agentDd.trigger.title = 'Autonomy mode — '
+        + (it ? it.label : m) + '. ' + AGENT_MODE_HINTS[m];
+    }
+    // Keep the agent run bar's native select in step (value only → no loop).
+    var runSelect = global.document.getElementById('agent-mode-select');
+    if (runSelect && runSelect.value !== m) runSelect.value = m;
   };
 
   // ---------------------------- attachments ---------------------------------
@@ -714,6 +1050,14 @@
     while (box.firstChild) box.removeChild(box.firstChild);
 
     var self = this;
+
+    // Count badge first so "how much context is attached" is readable at a
+    // glance even when the chips themselves scroll out of view.
+    var count = document.createElement('span');
+    count.className = 'attach-count';
+    count.textContent = this.attachments.length + ' attached';
+    box.appendChild(count);
+
     this.attachments.forEach(function (f) {
       var chip = document.createElement('span');
       chip.className = 'attach-chip';

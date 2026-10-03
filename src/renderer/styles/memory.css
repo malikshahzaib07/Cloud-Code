@@ -1,0 +1,201 @@
+/* =============================================================================
+ * Cloud Code — Agent long-term memory (window.agentMemory)
+ * All classes namespaced mem-*. Uses vscode.css variables for both themes.
+ * ============================================================================= */
+
+.mem-btn-open {
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 6px;
+}
+
+/* ---- overlay shell -------------------------------------------------------- */
+.mem-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+}
+
+.mem-card {
+  width: min(520px, 92vw);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel, #1e1e1e);
+  border: 1px solid var(--border-color, #3e3e42);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  color: var(--text-primary, #cccccc);
+  overflow: hidden;
+}
+
+.mem-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color, #3e3e42);
+  background: var(--bg-sidebar, #252526);
+}
+
+.mem-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.mem-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #969696);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.mem-close:hover { background: var(--bg-input, #3c3c3c); color: var(--text-primary, #cccccc); }
+
+/* ---- add form ------------------------------------------------------------- */
+.mem-add {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color, #3e3e42);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mem-textarea {
+  font: inherit;
+  font-size: 12px;
+  width: 100%;
+  resize: vertical;
+  padding: 7px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #3e3e42);
+  background: var(--bg-input, #3c3c3c);
+  color: var(--text-primary, #cccccc);
+}
+.mem-textarea:focus { outline: none; border-color: var(--accent-color, #007acc); }
+
+.mem-add-row { display: flex; gap: 8px; align-items: center; }
+
+.mem-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #3e3e42);
+  background: var(--bg-input, #3c3c3c);
+  color: var(--text-primary, #cccccc);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mem-btn:hover { border-color: var(--accent-color, #007acc); }
+.mem-btn-primary {
+  background: var(--accent-color, #007acc);
+  border-color: var(--accent-color, #007acc);
+  color: #ffffff;
+}
+.mem-btn-primary:hover { filter: brightness(1.1); }
+.mem-btn-danger { border-color: transparent; color: #f48771; }
+.mem-btn-danger:hover { border-color: #f48771; }
+
+.mem-select {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #3e3e42);
+  background: var(--bg-input, #3c3c3c);
+  color: var(--text-primary, #cccccc);
+}
+
+/* ---- toolbar -------------------------------------------------------------- */
+.mem-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color, #3e3e42);
+}
+
+.mem-input {
+  font: inherit;
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #3e3e42);
+  background: var(--bg-input, #3c3c3c);
+  color: var(--text-primary, #cccccc);
+}
+.mem-input:focus { outline: none; border-color: var(--accent-color, #007acc); }
+
+/* ---- list ----------------------------------------------------------------- */
+.mem-list {
+  overflow-y: auto;
+  padding: 6px;
+  flex: 1;
+  min-height: 120px;
+}
+.mem-list:focus { outline: none; }
+
+.mem-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "text del" "meta del";
+  gap: 2px 8px;
+  align-items: start;
+  padding: 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+}
+.mem-row:hover { background: var(--bg-sidebar, #252526); }
+.mem-row-focus { background: var(--bg-input, #3c3c3c); border-color: var(--accent-color, #007acc); }
+
+.mem-text {
+  grid-area: text;
+  font-size: 13px;
+  color: var(--text-primary, #cccccc);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mem-snip mark, .mem-snip { color: var(--text-primary, #cccccc); }
+
+.mem-meta {
+  grid-area: meta;
+  font-size: 11px;
+  color: var(--text-secondary, #969696);
+}
+
+.mem-del {
+  grid-area: del;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  color: var(--text-secondary, #969696);
+  opacity: 0.6;
+}
+.mem-row:hover .mem-del { opacity: 1; }
+.mem-del:hover { background: var(--bg-input, #3c3c3c); color: #f48771; }
+
+.mem-empty {
+  padding: 22px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary, #969696);
+}

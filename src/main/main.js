@@ -262,6 +262,111 @@ ipcMain.handle('shell:showItemInFolder', async (event, targetPath) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Images — preview support (no npm dependency needed: data URLs + base64) and
+// an optional OpenAI-compatible image-generation endpoint.
+// ---------------------------------------------------------------------------
+const IMAGE_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif'
+};
+
+ipcMain.handle('fs:readImage', async (event, filePath) => {
+  try {
+    const ext = path.extname(String(filePath)).toLowerCase();
+    const mime = IMAGE_MIME[ext];
+    if (!mime) return { error: `Not an image: ${ext || filePath}` };
+    const stat = await fsp.stat(filePath);
+    if (stat.size > 25 * 1024 * 1024) return { error: 'Image is larger than 25 MB.' };
+    const buf = await fsp.readFile(filePath);
+    return { mime, size: stat.size, dataUrl: `data:${mime};base64,${buf.toString('base64')}` };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('fs:writeBase64', async (event, filePath, dataUrl) => {
+  try {
+    const match = /^data:([^;]+);base64,(.*)$/s.exec(String(dataUrl || ''));
+    if (!match) return { error: 'Expected a base64 data URL.' };
+    const mime = match[1];
+    const ext = Object.keys(IMAGE_MIME).find((e) => IMAGE_MIME[e] === mime) || '.png';
+    let target = String(filePath);
+    if (!path.extname(target)) target += ext;
+    const dir = path.dirname(target);
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(target, Buffer.from(match[2], 'base64'));
+    return { ok: true, path: target };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('ai:generateImage', async (event, opts = {}) => {
+  const prompt = String(opts.prompt || '').trim();
+  if (!prompt) return { error: 'A prompt is required.' };
+  try {
+    const url = new URL(`${aiBaseUrl}/images/generations`);
+    const client = url.protocol === 'https:' ? https : http;
+    const postBody = JSON.stringify({
+      model: opts.model || 'gpt-image-1',
+      prompt,
+      n: 1,
+      size: opts.size || '1024x1024',
+      response_format: 'b64_json'
+    });
+
+    return await new Promise((resolve) => {
+      const req = client.request(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${aiApiKey}`,
+          'Content-Length': Buffer.byteLength(postBody)
+        },
+        timeout: 180000
+      }, (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            resolve({
+              error: `Image endpoint returned ${res.statusCode}. ` +
+                'Your local server may not support image generation.'
+            });
+            return;
+          }
+          try {
+            const parsed = JSON.parse(body);
+            const first = parsed && parsed.data && parsed.data[0];
+            if (first && first.b64_json) {
+              resolve({ dataUrl: `data:image/png;base64,${first.b64_json}`, revisedPrompt: first.revised_prompt || '' });
+            } else if (first && first.url) {
+              resolve({ url: first.url });
+            } else {
+              resolve({ error: 'The response contained no image data.' });
+            }
+          } catch (err) {
+            resolve({ error: `Could not parse the image response: ${err.message}` });
+          }
+        });
+      });
+      req.on('error', (err) => resolve({ error: err.message }));
+      req.write(postBody);
+      req.end();
+    });
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 app.on('before-quit', () => {
   stopWorkspaceWatch();
 });
@@ -309,7 +414,9 @@ function loadPty() {
 
 function shellSpec() {
   if (process.platform === 'win32') {
-    return { file: 'powershell.exe', args: ['-NoLogo'] };
+    // -ExecutionPolicy Bypass: without it the user's machine policy blocks any
+    // script execution ("running scripts is disabled on this system").
+    return { file: 'powershell.exe', args: ['-NoLogo', '-ExecutionPolicy', 'Bypass'] };
   }
   return { file: process.env.SHELL || '/bin/bash', args: ['-l'] };
 }
@@ -501,6 +608,41 @@ ipcMain.handle('settings:set', (event, patch) => {
     persistSettings();
   }
   return { ...DEFAULT_SETTINGS, ...appSettings };
+});
+
+// ---------------------------------------------------------------------------
+// Generic JSON store in the app's userData folder. Used by the session manager
+// and the agent's long-term memory so both survive restarts and model changes.
+// Names are sanitised: letters, digits, dot, dash, underscore only.
+// ---------------------------------------------------------------------------
+function storePathFor(name) {
+  const safe = String(name || 'store')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/^\.+/, '_');
+  return path.join(app.getPath('userData'), 'store', `${safe || 'store'}.json`);
+}
+
+ipcMain.handle('store:read', async (event, name) => {
+  try {
+    const p = storePathFor(name);
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch (err) {
+    console.warn('store:read failed:', err.message);
+    return null;
+  }
+});
+
+ipcMain.handle('store:write', async (event, name, data) => {
+  try {
+    const p = storePathFor(name);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf-8');
+    return true;
+  } catch (err) {
+    console.warn('store:write failed:', err.message);
+    return false;
+  }
 });
 
 ipcMain.handle('ai:listModels', async () => {
@@ -807,8 +949,13 @@ ipcMain.handle('shell:run', async (event, opts = {}) => {
   const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : process.cwd();
   const timeoutMs = Math.min(opts.timeoutMs || 60000, 300000);
   const isWin = process.platform === 'win32';
-  const bin = isWin ? 'cmd.exe' : '/bin/bash';
-  const args = isWin ? ['/d', '/s', '/c', command] : ['-lc', command];
+  // PowerShell (not cmd) so .ps1 scripts, npm/git/python and ordinary shell
+  // syntax all work; -ExecutionPolicy Bypass avoids "script execution is
+  // disabled by the system policy" errors from the user's machine policy.
+  const bin = isWin ? 'powershell.exe' : '/bin/bash';
+  const args = isWin
+    ? ['-NoLogo', '-ExecutionPolicy', 'Bypass', '-Command', command]
+    : ['-lc', command];
   const CAP = 51200; // 50KB cap per stream
 
   return new Promise((resolve) => {
@@ -925,6 +1072,12 @@ function requestChatOnce(id, payload, includeTools) {
             const choice = parsed.choices && parsed.choices[0];
             const msg = (choice && choice.message) || {};
             let content = typeof msg.content === 'string' ? msg.content : '';
+            // Some local models stream their chain-of-thought in a separate
+            // field. Keep it apart from the answer so the renderer can hide it
+            // when the user set "Think: Off".
+            const reasoning = String(
+              msg.reasoning_content || msg.reasoning || msg.thinking || ''
+            );
             const toolCalls = [];
             let usedNativeTools = false;
 
@@ -970,6 +1123,7 @@ function requestChatOnce(id, payload, includeTools) {
             resolve({
               id,
               content,
+              reasoning,
               toolCalls,
               usedNativeTools,
               finishReason: (choice && choice.finish_reason) || null

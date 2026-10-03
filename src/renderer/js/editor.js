@@ -1,4 +1,15 @@
 // Monaco Editor & Tabs Manager (source files + diff review tabs)
+const IMAGE_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif'
+]);
+
+function isImagePath(filePath) {
+  const name = String(filePath || '');
+  const dot = name.lastIndexOf('.');
+  if (dot === -1) return false;
+  return IMAGE_EXTENSIONS.has(name.slice(dot).toLowerCase());
+}
+
 class EditorManager {
   constructor(hostId, tabsBarId) {
     this.host = document.getElementById(hostId);
@@ -206,14 +217,32 @@ class EditorManager {
     if (this.emptyState) this.emptyState.style.display = 'flex';
     if (this.editorDiv) this.editorDiv.style.display = 'none';
     if (this.diffHost) this.diffHost.classList.add('hidden');
-    const titleEl = document.getElementById('active-file-title');
-    if (titleEl) titleEl.textContent = 'Cloud Code';
+    if (this.imageHost) this.imageHost.classList.add('hidden');
+
+    // Keep the empty state honest: closing the last tab must never look like
+    // the folder was deleted, so only offer "Open Folder" when none is open.
+    const root = (window.explorer && window.explorer.rootPath) || '';
+    const openBlock = document.getElementById('empty-workspace-open');
+    const noBlock = document.getElementById('empty-no-workspace');
+    if (openBlock && noBlock) {
+      openBlock.hidden = !root;
+      noBlock.hidden = !!root;
+    }
+    if (root && openBlock) {
+      const sub = openBlock.querySelector('.empty-subtitle');
+      if (sub) {
+        const name = String(root).split(/[\\/]/).filter(Boolean).pop() || 'Folder';
+        sub.textContent = `${name} is open — no file open`;
+      }
+    }
+    this.updateWindowTitle();
     this.renderTabs();
     this._emitActiveFile();
   }
 
   _showCodePane() {
     this._hideEmptyState();
+    if (this.imageHost) this.imageHost.classList.add('hidden');
     if (this.editorDiv) this.editorDiv.style.display = '';
     if (this.diffHost) this.diffHost.classList.add('hidden');
   }
@@ -228,6 +257,11 @@ class EditorManager {
   // File tabs
   // -------------------------------------------------------------------------
   openFile(filePath, content) {
+    // Images never go through Monaco — they open in the built-in preview.
+    if (isImagePath(filePath)) {
+      this.openImage(filePath);
+      return;
+    }
     if (!this.monacoInstance || !this.activeEditor) {
       this.pendingOpen = { filePath, content };
       return;
@@ -266,19 +300,147 @@ class EditorManager {
 
     this.activeFilePath = filePath;
     this.activeDiffId = null;
-    this._showCodePane();
-    this.activeEditor.setModel(tab.model);
-    this.activeEditor.focus();
 
-    const lang = this._languageFor(tab.title);
+    if (tab.isImage) {
+      this._renderImage(tab);
+    } else {
+      this._showCodePane();
+      this.activeEditor.setModel(tab.model);
+      this.activeEditor.focus();
+    }
+
     const langEl = document.getElementById('statusbar-lang');
-    if (langEl) langEl.textContent = lang.toUpperCase();
+    if (langEl) langEl.textContent = tab.isImage ? 'IMAGE' : this._languageFor(tab.title).toUpperCase();
 
     const titleEl = document.getElementById('active-file-title');
     if (titleEl) titleEl.textContent = `${tab.title}${tab.dirty ? ' •' : ''} - Cloud Code`;
 
     this.renderTabs();
     this._emitActiveFile();
+  }
+
+  // -------------------------------------------------------------------------
+  // Image preview (no npm dependency — data URLs rendered in an <img>)
+  // -------------------------------------------------------------------------
+  openImage(filePath) {
+    const filename = filePath.split(/[\\/]/).pop();
+    let tab = this.tabs.get(filePath);
+    if (!tab) {
+      tab = {
+        filePath,
+        title: filename,
+        isImage: true,
+        model: null,
+        dataUrl: null,
+        loadError: null,
+        bytes: 0,
+        zoom: 1,
+        fit: true,
+        dirty: false,
+        originalContent: ''
+      };
+      this.tabs.set(filePath, tab);
+      this.tabOrder.push('file:' + filePath);
+    }
+    this._activateFile(filePath);
+
+    if (!tab.dataUrl && !tab.loadError && window.electronAPI && window.electronAPI.readImage) {
+      window.electronAPI.readImage(filePath).then((r) => {
+        if (!r || r.error) tab.loadError = (r && r.error) || 'Could not load this image.';
+        else { tab.dataUrl = r.dataUrl; tab.bytes = r.size || 0; }
+        if (this.activeFilePath === filePath) this._renderImage(tab);
+      }).catch((e) => {
+        tab.loadError = String((e && e.message) || e);
+        if (this.activeFilePath === filePath) this._renderImage(tab);
+      });
+    }
+  }
+
+  _ensureImageHost() {
+    if (this.imageHost) return this.imageHost;
+    const host = document.createElement('div');
+    host.id = 'image-host';
+    host.className = 'image-host hidden';
+    host.innerHTML = `
+      <div class="image-toolbar">
+        <button class="img-btn" data-act="out" title="Zoom out">−</button>
+        <span class="img-zoom">100%</span>
+        <button class="img-btn" data-act="in" title="Zoom in">+</button>
+        <button class="img-btn" data-act="fit" title="Fit to window">Fit</button>
+        <button class="img-btn" data-act="one" title="Actual size (100%)">1:1</button>
+        <span class="img-meta"></span>
+      </div>
+      <div class="image-stage"></div>`;
+
+    host.addEventListener('click', (e) => {
+      const act = e.target && e.target.getAttribute ? e.target.getAttribute('data-act') : null;
+      if (!act) return;
+      const tab = this.activeFilePath ? this.tabs.get(this.activeFilePath) : null;
+      if (!tab || !tab.isImage) return;
+      if (act === 'in') { tab.fit = false; tab.zoom = Math.min(8, tab.zoom * 1.25); }
+      else if (act === 'out') { tab.fit = false; tab.zoom = Math.max(0.1, tab.zoom / 1.25); }
+      else if (act === 'fit') { tab.fit = true; }
+      else if (act === 'one') { tab.fit = false; tab.zoom = 1; }
+      this._renderImage(tab);
+    });
+
+    const parent = (this.editorDiv && this.editorDiv.parentNode) ? this.editorDiv.parentNode : this.host;
+    if (parent) parent.appendChild(host);
+    this.imageHost = host;
+    return host;
+  }
+
+  _renderImage(tab) {
+    const host = this._ensureImageHost();
+    const stage = host.querySelector('.image-stage');
+    if (!stage) return;
+
+    host.classList.remove('hidden');
+    if (this.editorDiv) this.editorDiv.style.display = 'none';
+    if (this.diffHost) this.diffHost.classList.add('hidden');
+    if (this.emptyState) this.emptyState.style.display = 'none';
+
+    if (tab.loadError) {
+      stage.innerHTML = '';
+      const err = document.createElement('div');
+      err.className = 'image-error';
+      err.textContent = tab.loadError;
+      stage.appendChild(err);
+      const meta = host.querySelector('.img-meta');
+      if (meta) meta.textContent = '';
+      return;
+    }
+
+    let img = stage.querySelector('img');
+    if (!img) {
+      stage.innerHTML = '';
+      img = document.createElement('img');
+      img.alt = tab.title || 'image';
+      stage.appendChild(img);
+    }
+    if (tab.dataUrl && img.getAttribute('src') !== tab.dataUrl) img.setAttribute('src', tab.dataUrl);
+
+    const applySize = () => {
+      if (tab.fit) {
+        img.style.maxWidth = '100%';
+        img.style.maxHeight = '100%';
+        img.style.width = '';
+      } else {
+        const base = img.naturalWidth || 0;
+        img.style.maxWidth = 'none';
+        img.style.maxHeight = 'none';
+        img.style.width = Math.round(base * tab.zoom) + 'px';
+      }
+      const meta = host.querySelector('.img-meta');
+      if (meta) {
+        const size = tab.bytes ? `  ·  ${(tab.bytes / 1024).toFixed(1)} KB` : '';
+        meta.textContent = `${img.naturalWidth} × ${img.naturalHeight} px${size}`;
+      }
+      const zoomLabel = host.querySelector('.img-zoom');
+      if (zoomLabel) zoomLabel.textContent = tab.fit ? 'fit' : Math.round(tab.zoom * 100) + '%';
+    };
+    img.onload = applySize;
+    if (img.complete) applySize();
   }
 
   _languageFor(filename) {

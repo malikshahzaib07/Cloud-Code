@@ -286,6 +286,56 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (window.AppSettings) window.AppSettings.set('autocompleteEnabled', !cur);
     } });
     P.register('agent.reviewChanges', { title: 'Agent: Review Workspace Changes', category: 'Agent', handler: () => { if (window.agent) window.agent.toggleChangesPopup(); } });
+
+    // Generate an image through the configured OpenAI-compatible endpoint and
+    // open it in the editor's image viewer.
+    P.register('ai.generateImage', {
+      title: 'AI: Generate Image…',
+      category: 'AI',
+      handler: async () => {
+        const api = window.electronAPI;
+        if (!api || !api.generateImage) {
+          alert('Image generation is not available in this build.');
+          return;
+        }
+        const root = window.explorer.rootPath;
+        if (!root) {
+          alert('Open a folder first — generated images are saved inside the workspace.');
+          return;
+        }
+        let prompt;
+        try {
+          prompt = await window.explorer.askName('Describe the image you want', '');
+        } catch (e) {
+          return;
+        }
+        if (!prompt) return;
+
+        const status = document.getElementById('statusbar-ai-status');
+        if (status) status.textContent = '● Generating image…';
+        let res;
+        try {
+          res = await api.generateImage({ prompt: prompt, size: '1024x1024' });
+        } catch (err) {
+          res = { error: (err && err.message) || String(err) };
+        }
+        if (status) status.textContent = '● AI Ready';
+
+        if (!res || res.error || (!res.dataUrl && !res.url)) {
+          alert('Image generation failed:\n' + ((res && res.error) || 'No image returned.'));
+          return;
+        }
+        const dataUrl = res.dataUrl || res.url;
+        const name = 'generated/image-' + Date.now();
+        const written = await api.writeBase64(root + '/' + name, dataUrl);
+        if (!written || !written.ok) {
+          alert('Could not save the image:\n' + ((written && written.error) || 'unknown error'));
+          return;
+        }
+        await window.explorer.render();
+        window.editor.openFile(written.path, '');
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------

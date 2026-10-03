@@ -696,6 +696,31 @@ html[data-theme="light"] .think-text { color: #4a4a4a; }
 html[data-theme="light"] .think-step { color: #767676; }
 html[data-theme="light"] .think-dot { background: #9a9a9a; }
 
+html[data-theme="light"] .chat-empty {
+  border-top-color: #e0e0e0;
+}
+
+html[data-theme="light"] .chat-hint,
+html[data-theme="light"] .chat-busy-hint {
+  background: #f3f3f3;
+  color: #6f6f6f;
+}
+
+html[data-theme="light"] .chat-hint { color: #7a7a7a; }
+
+html[data-theme="light"] .chat-busy-hint {
+  border-top-color: #e0e0e0;
+}
+
+html[data-theme="light"] .chat-starter {
+  background: #ffffff;
+  border-color: #d4d4d4;
+  color: #1f1f1f;
+}
+
+html[data-theme="light"] .chat-empty-title { color: #767676; }
+html[data-theme="light"] .chat-cap-item { color: #4a4a4a; }
+
 /* ---------- Scrollbars (matches the app's global scrollbar language) ---------- */
 #chat-messages::-webkit-scrollbar { width: 10px; height: 10px; }
 #chat-messages::-webkit-scrollbar-thumb {
@@ -721,6 +746,167 @@ html[data-theme="light"] .think-dot { background: #9a9a9a; }
 .msg-code-pre::-webkit-scrollbar-corner,
 .msg-tablewrap::-webkit-scrollbar-corner { background: transparent; }
 
+/* ==========================================================================
+   chat-* — chat box chrome: auto-growing input, footer hint, in-flight
+   ("working") state and the empty state with clickable starter prompts.
+   ========================================================================== */
+
+/* --- Auto-growing textarea (caps at ~8 lines, then scrolls internally) --- */
+
+.chat-footer .chat-input-full {
+  box-shadow: inset 0 1px 0 var(--border-color, #3e3e42);
+}
+
+/* --- In-flight / working state ------------------------------------------ */
+
+.chat-footer-busy .input-box-wrapper {
+  opacity: 0.82;
+  transition: opacity 0.15s ease;
+}
+
+.chat-busy {
+  border-color: color-mix(in srgb, var(--accent-color, #007acc) 45%, transparent) !important;
+}
+
+.chat-hint {
+  padding: 2px 8px 3px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-muted, var(--text-secondary, #8a8a8a));
+  background: var(--bg-sidebar, #f3f3f3);
+  user-select: none;
+  -webkit-user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-hint-muted { opacity: 0.45; }
+
+.chat-busy-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 4px;
+  font-size: 10.5px;
+  line-height: 14px;
+  color: var(--text-secondary, #6e6e6e);
+  background: var(--bg-sidebar, #f3f3f3);
+  border-top: 1px solid var(--border-subtle, #e0e0e0);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chat-busy-hint[hidden] { display: none; }
+
+.chat-busy-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Stop has to be unmissable while a request is in flight. */
+.chat-stop {
+  font-weight: 700;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cc-danger, #e53e3e) 55%, transparent);
+}
+
+.chat-stop:disabled {
+  opacity: 0.85;
+  cursor: default;
+}
+
+/* --- Empty state: capabilities + starter prompts ------------------------- */
+
+.chat-empty {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--border-subtle, #dcdcdc);
+}
+
+.chat-empty-title {
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-muted, var(--text-secondary, #8a8a8a));
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chat-capabilities {
+  margin: 0 0 9px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-cap-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary, #6e6e6e);
+}
+
+.chat-cap-icon {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.chat-cap-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chat-starter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-primary, #1f1f1f);
+  background: var(--bg-input, #ffffff);
+  border: 1px solid var(--border-color, #d4d4d4);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.chat-starter:hover {
+  color: var(--accent-color, #007acc);
+  border-color: var(--accent-color, #007acc);
+  background: color-mix(in srgb, var(--accent-color, #007acc) 8%, transparent);
+}
+
+.chat-starter:focus-visible {
+  outline: 1px solid var(--accent-color, #007acc);
+  outline-offset: 1px;
+}
+
+.chat-starter-icon { flex: 0 0 auto; font-size: 10px; }
+
+.chat-starter-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- Narrow panel (resizable to ~260px) ---------- */
 @media (max-width: 340px) {
   .msg-time { display: none; }
@@ -732,6 +918,9 @@ html[data-theme="light"] .think-dot { background: #9a9a9a; }
   .msg-h2 { font-size: 14px; }
   .think-log { max-height: 140px; }
   .think-line { font-size: 11px; }
+  .chat-hint { font-size: 9.5px; }
+  .chat-busy-hint { font-size: 10px; }
+  .chat-starter { font-size: 10.5px; padding: 2px 7px; }
 }
 
 /* Very narrow: drop the secondary label, keep avatar + actions */

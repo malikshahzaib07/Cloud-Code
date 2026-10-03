@@ -8,6 +8,21 @@
 const THINK_MAX_LINES = 30;
 const THINK_PHASES = ['planning', 'thinking', 'tool'];
 
+// Chat box tuning: the textarea grows to ~8 lines and then scrolls.
+const CHAT_MAX_INPUT_LINES = 8;
+const CHAT_INPUT_LINE_FALLBACK = 18;   // px, when the UA gives us no line-height
+// How close to the bottom counts as "the user is following along" (px).
+const CHAT_STICK_GAP = 64;
+
+// Empty-state capabilities. Each one is a clickable starter prompt.
+const CHAT_STARTERS = [
+  { icon: '📄', label: 'Create files', text: 'Create a new file src/utils/debounce.js with a small debounce helper and JSDoc comments for each parameter.' },
+  { icon: '✏️', label: 'Edit code', text: 'Refactor the active file for clarity — shorter functions, clearer names — and show me what you changed.' },
+  { icon: '🗑️', label: 'Delete or move files', text: 'Scan the project for unused or duplicated files and propose which ones to delete or move, and where to.' },
+  { icon: '🔍', label: 'Search the project', text: 'Search the project for TODO and FIXME comments and summarise what each one asks for.' },
+  { icon: '▶️', label: 'Run commands', text: 'List the project root, then run the test suite and summarise any failures.' }
+];
+
 class AIAssistant {
   constructor(messagesId, inputId, sendBtnId) {
     this.messagesContainer = document.getElementById(messagesId);
@@ -24,6 +39,15 @@ class AIAssistant {
     this.isStreaming = false;
     this.currentResponseNode = null;
     this.currentResponseText = '';
+
+    // Chat box chrome (created in init())
+    this.footerEl = this.input && this.input.closest ? this.input.closest('.chat-footer') : null;
+    this.inputBox = this.input && this.input.closest ? this.input.closest('.input-box-wrapper') : null;
+    this.hintEl = null;
+    this.busyEl = null;
+    this.busy = false;
+    // Scroll stickiness: true while the user is reading the tail.
+    this._stick = true;
 
     // @mention popup state
     this.mentionItems = [];
@@ -45,10 +69,21 @@ class AIAssistant {
     if (this.modeChatBtn) this.modeChatBtn.onclick = () => this.setMode('chat');
     if (this.modeAgentBtn) this.modeAgentBtn.onclick = () => this.setMode('agent');
 
-    // @-mention autocomplete in the chat input
-    this.input.addEventListener('input', () => this.updateMentions());
+    // Auto-growing textarea (caps at CHAT_MAX_INPUT_LINES, then scrolls).
+    this.buildFooterChrome();
+    this.input.addEventListener('input', () => {
+      this.autoGrowInput();
+      this.updateMentions();
+    });
     this.input.addEventListener('blur', () => setTimeout(() => this.hideMentions(), 150));
     this.input.addEventListener('click', () => this.updateMentions());
+
+    // Scroll stickiness: track whether the user is following the tail.
+    if (this.messagesContainer && this.messagesContainer.addEventListener) {
+      this.messagesContainer.addEventListener('scroll', () => {
+        this._stick = this.isNearBottom();
+      }, { passive: true });
+    }
 
     if (this.clearBtn) {
       this.clearBtn.onclick = () => {
@@ -91,6 +126,12 @@ class AIAssistant {
 
     // Live agent reasoning stream → thinking panel
     window.addEventListener('agent:thinking', (e) => this.onAgentThinking(e));
+
+    // "Think: Off" must apply *immediately*, without a reload: the control bar
+    // broadcasts chat:think-changed, the settings modal broadcasts
+    // settings-changed. Either way the panel goes away at once.
+    window.addEventListener('chat:think-changed', () => this.syncThinkingLevel());
+    document.addEventListener('settings-changed', () => this.syncThinkingLevel());
 
     // Clear the thinking panel when the agent itself resets (stop, new run).
     if (window.agent && window.agent.reset) {
@@ -143,7 +184,147 @@ class AIAssistant {
     this._msgTimeTimer = setInterval(() => this.refreshTimestamps(), 30000);
 
     this.setMode('chat');
+    this.autoGrowInput();
+    this.updateSendEnabled();
+    this.setBusyState(false);
     this.renderWelcome();
+  }
+
+  // ==========================================================================
+  // Chat box chrome: footer hint, busy state, auto-growing input, stick scroll
+  // ==========================================================================
+
+  // Adds the (namespaced) footer hint + busy progress line. Both are created
+  // from JS so index.html stays untouched.
+  buildFooterChrome() {
+    const host = this.footerEl || (this.inputBox && this.inputBox.parentNode);
+    if (!host || !document.createElement) return;
+
+    if (!this.hintEl) {
+      this.hintEl = document.createElement('div');
+      this.hintEl.className = 'chat-hint';
+      this.hintEl.textContent = 'Enter to send · Shift+Enter for a new line · @ attaches a file';
+      if (this.inputBox && this.inputBox.nextSibling) {
+        host.insertBefore(this.hintEl, this.inputBox.nextSibling);
+      } else {
+        host.appendChild(this.hintEl);
+      }
+    }
+
+    if (!this.busyEl) {
+      this.busyEl = document.createElement('div');
+      this.busyEl.className = 'chat-busy-hint';
+      this.busyEl.hidden = true;
+      this.busyEl.innerHTML = '<span class="msg-spinner" aria-hidden="true"></span>'
+        + '<span class="chat-busy-text"></span>';
+      if (this.hintEl && this.hintEl.nextSibling) {
+        host.insertBefore(this.busyEl, this.hintEl.nextSibling);
+      } else {
+        host.appendChild(this.busyEl);
+      }
+    }
+  }
+
+  // While a request is in flight: dim the input, show a progress hint and make
+  // the button read unmistakably as "Stop".
+  setBusyState(on, label) {
+    this.busy = !!on;
+    if (this.busyEl) {
+      this.busyEl.hidden = !on;
+      const text = this.busyEl.querySelector('.chat-busy-text');
+      if (text) text.textContent = label || (this.mode === 'agent'
+        ? 'Agent is working — press Stop to interrupt'
+        : 'Thinking… press Stop to cancel');
+    }
+    if (this.inputBox && this.inputBox.classList) {
+      this.inputBox.classList.toggle('chat-busy', !!on);
+    }
+    if (this.footerEl && this.footerEl.classList) {
+      this.footerEl.classList.toggle('chat-footer-busy', !!on);
+    }
+    if (this.hintEl && this.hintEl.classList) {
+      this.hintEl.classList.toggle('chat-hint-muted', !!on);
+    }
+    if (this.sendBtn && this.sendBtn.setAttribute) {
+      this.sendBtn.setAttribute('aria-busy', on ? 'true' : 'false');
+      this.sendBtn.classList.toggle('chat-stop', !!on);
+    }
+    this.updateSendEnabled();
+  }
+
+  // Send is only offered when there is something to send (and never while a
+  // request is running — the button is a Stop button then).
+  updateSendEnabled() {
+    if (!this.sendBtn) return;
+    const hasText = !!(this.input && String(this.input.value || '').trim());
+    // A running agent owns the Stop button, so never disable it there.
+    const agentRunning = this.mode === 'agent'
+      && !!(window.agent && window.agent.running);
+    this.sendBtn.disabled = !!(this.busy && !agentRunning) || (!hasText && !agentRunning);
+  }
+
+  _inputLineHeight() {
+    let lh = 0;
+    try {
+      if (window.getComputedStyle) {
+        lh = parseFloat(window.getComputedStyle(this.input).lineHeight);
+      }
+    } catch (e) { /* fall back */ }
+    return (lh && isFinite(lh) && lh > 0) ? lh : CHAT_INPUT_LINE_FALLBACK;
+  }
+
+  _inputPadding() {
+    let pad = 0;
+    try {
+      if (window.getComputedStyle) {
+        const cs = window.getComputedStyle(this.input);
+        pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+      }
+    } catch (e) { /* ignore */ }
+    return pad || 6;
+  }
+
+  // Height ceiling for the auto-growing textarea: ~8 lines.
+  inputMaxHeight() {
+    return Math.round(this._inputLineHeight() * CHAT_MAX_INPUT_LINES + this._inputPadding());
+  }
+
+  // Grow with the content up to the cap, then scroll internally. Also called
+  // after a send so the box shrinks back.
+  autoGrowInput() {
+    const el = this.input;
+    if (!el) return { height: 0, max: 0 };
+    const lh = this._inputLineHeight();
+    const pad = this._inputPadding();
+    const max = Math.round(lh * CHAT_MAX_INPUT_LINES + pad);
+    const lines = Math.max(1, String(el.value == null ? '' : el.value).split('\n').length);
+    // `scrollHeight` is authoritative in a real layout; the line estimate keeps
+    // the behaviour sane (and testable) where layout metrics are unavailable.
+    const wanted = Math.max(el.scrollHeight || 0, Math.round(lines * lh + pad));
+    const height = Math.min(wanted, max);
+    el.style.height = height + 'px';
+    el.style.overflowY = wanted > max ? 'auto' : 'hidden';
+    if (el.classList) el.classList.toggle('chat-input-full', wanted > max);
+    return { height, max, wanted, capped: wanted > max };
+  }
+
+  // True when the transcript is scrolled to (or near) the bottom.
+  isNearBottom(gap) {
+    const c = this.messagesContainer;
+    if (!c) return true;
+    const g = gap == null ? CHAT_STICK_GAP : gap;
+    return (c.scrollHeight - c.scrollTop - c.clientHeight) <= g;
+  }
+
+  // Sticks to the bottom only if the user is already there; pass `force` to
+  // override (never used automatically — history reading is never yanked).
+  scrollToBottom(force) {
+    const c = this.messagesContainer;
+    if (!c) return false;
+    const stick = force === true || (this._stick !== false && this.isNearBottom());
+    if (!stick) return false;
+    c.scrollTop = c.scrollHeight;
+    return true;
   }
 
   // ==========================================================================
@@ -168,6 +349,8 @@ class AIAssistant {
     } catch (e) {
       // CustomEvent unavailable (plain-browser preview)
     }
+    this.syncBusyFromAgent();
+    this.updateSendEnabled();
   }
 
   // ==========================================================================
@@ -176,6 +359,18 @@ class AIAssistant {
   onAgentThinking(e) {
     const d = (e && e.detail) || {};
     const phase = d.phase;
+
+    // Any agent progress doubles as the "a request is in flight" signal.
+    this.syncBusyFromAgent();
+
+    // Re-checked on EVERY event (not only at boot), so switching the level
+    // applies immediately without a reload. With thinking off there is no
+    // panel at all — not even a hidden one waiting to be populated.
+    if (!this.thinkingEnabled()) {
+      if (this.thinkPanel && this.thinkPanel.isLive()) this.thinkPanel.destroy();
+      return;
+    }
+
     if (phase === 'done') {
       this.thinkPanel.finish(Number(d.step) || 0);
       return;
@@ -187,6 +382,53 @@ class AIAssistant {
       phase: THINK_PHASES.indexOf(phase) === -1 ? 'thinking' : phase,
       step: Number(d.step) || 0
     });
+  }
+
+  // Current reasoning level (read live from settings, never cached).
+  thinkLevel() {
+    try {
+      const v = window.AppSettings ? window.AppSettings.get('thinkLevel') : null;
+      return v == null ? 'medium' : String(v);
+    } catch (e) {
+      return 'medium';
+    }
+  }
+
+  thinkingEnabled() {
+    return this.thinkLevel() !== 'off';
+  }
+
+  // Applied whenever the level changes in either place.
+  syncThinkingLevel() {
+    if (!this.thinkingEnabled() && this.thinkPanel && this.thinkPanel.isLive()) {
+      this.thinkPanel.destroy();
+    }
+  }
+
+  // Agent runs have no `onAiEnd`; mirror `window.agent.running` into the
+  // in-flight state so Stop is always obvious.
+  syncBusyFromAgent() {
+    if (this.mode !== 'agent') return;
+    const running = !!(window.agent && window.agent.running);
+    if (running !== this.busy) this.setBusyState(running);
+  }
+
+  // With thinking off, never surface reasoning-style payloads
+  // (`res.reasoning`, `reasoning_content`, <think>…</think> blocks).
+  stripReasoning(text) {
+    if (text == null || text === '') return '';
+    let s = String(text);
+    s = s.replace(/<\s*think(?:ing)?\s*>[\s\S]*?<\s*\/\s*think(?:ing)?\s*>/gi, '');
+    // `res.reasoning:` / `"reasoning_content":` / `reasoning = …`
+    s = s.replace(/(?:res(?:ponse)?\s*\.\s*)?["']?reasoning(?:_content|_text)?["']?\s*[:=]\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\n]*)/gi, '');
+    // Tidy up the JSON/object holes that removal leaves behind.
+    s = s.replace(/\{\s*,/g, '{').replace(/,\s*\}/g, '}').replace(/,\s*,/g, ',');
+    return s;
+  }
+
+  // What is safe to display for the current reasoning level.
+  displayText(text) {
+    return this.thinkingEnabled() ? String(text == null ? '' : text) : this.stripReasoning(text);
   }
 
   // ==========================================================================
@@ -227,12 +469,14 @@ class AIAssistant {
   handleSend() {
     if (this.mode === 'agent') {
       if (window.agent && window.agent.running) {
+        this.setBusyState(false);
         window.agent.requestStop();
         return;
       }
       const text = this.input.value.trim();
       if (!text) return;
       this.input.value = '';
+      this.afterSend();
       this.dispatch(text);
       return;
     }
@@ -247,7 +491,14 @@ class AIAssistant {
     const text = this.input.value.trim();
     if (!text) return;
     this.input.value = '';
+    this.afterSend();
     this.dispatch(text);
+  }
+
+  // The textarea shrinks back to one line once the message is on its way.
+  afterSend() {
+    this.autoGrowInput();
+    this.updateSendEnabled();
   }
 
   sendPromptWithContext(userPrompt) {
@@ -323,7 +574,7 @@ class AIAssistant {
   }
 
   thinkDirective() {
-    const level = window.AppSettings ? window.AppSettings.get('thinkLevel') : 'medium';
+    const level = this.thinkLevel();
     switch (level) {
       case 'off':
         return '';
@@ -651,8 +902,43 @@ class AIAssistant {
       + '<div class="msg-body msg-muted">'
       + '<p>Hi! I am your local AI coding companion powered by your private GPU tunnel.</p>'
       + '<p>Type <code class="msg-inline-code">@</code> to attach files, switch to <b>Agent</b> mode to let me edit files and run commands, or use a quick action below.</p>'
-      + '</div>';
+      + '</div>'
+      + this.emptyStateHtml();
     this.messagesContainer.appendChild(welcome);
+    this.wireStarters(welcome);
+  }
+
+  // Empty state: what the agent can do, each line a one-click starter prompt.
+  emptyStateHtml() {
+    const items = CHAT_STARTERS.map((s) =>
+      '<li class="chat-cap-item">'
+      + '<span class="chat-cap-icon" aria-hidden="true">' + s.icon + '</span>'
+      + '<span class="chat-cap-text">' + this.escapeHtml(s.label) + '</span>'
+      + '</li>').join('');
+    const starters = CHAT_STARTERS.map((s, i) =>
+      '<button type="button" class="chat-starter" data-starter-index="' + i + '">'
+      + '<span class="chat-starter-icon" aria-hidden="true">' + s.icon + '</span>'
+      + '<span class="chat-starter-label">' + this.escapeHtml(s.label) + '</span>'
+      + '</button>').join('');
+    return '<div class="chat-empty">'
+      + '<div class="chat-empty-title">I can…</div>'
+      + '<ul class="chat-capabilities">' + items + '</ul>'
+      + '<div class="chat-empty-title">Try one</div>'
+      + '<div class="chat-starters">' + starters + '</div>'
+      + '</div>';
+  }
+
+  wireStarters(container) {
+    if (!container || !container.querySelectorAll) return;
+    const self = this;
+    container.querySelectorAll('.chat-starter[data-starter-index]').forEach((btn) => {
+      btn.onclick = () => {
+        const i = Number(btn.getAttribute('data-starter-index'));
+        const s = CHAT_STARTERS[i];
+        if (!s) return;
+        self.sendPromptWithContext(s.text);
+      };
+    });
   }
 
   appendUserMessage(text, contextPreview) {
@@ -715,7 +1001,8 @@ class AIAssistant {
     const body = node.querySelector('.msg-body');
     if (!body) return;
     const live = streaming === undefined ? !!this.isStreaming : !!streaming;
-    body.innerHTML = this.renderMarkdown(text) + (live ? '<span class="msg-cursor"></span>' : '');
+    // Reasoning text never reaches the DOM while thinking is off.
+    body.innerHTML = this.renderMarkdown(this.displayText(text)) + (live ? '<span class="msg-cursor"></span>' : '');
     this.wireCodeButtons(body);
   }
 
@@ -995,6 +1282,9 @@ class AIAssistant {
     if (this.sendBtn && this.sendBtn.classList) {
       this.sendBtn.classList.toggle('chat-sending', !!isStreaming);
     }
+    // In-flight state (dimmed input + progress hint) rides along with the
+    // button so the two can never disagree.
+    this.setBusyState(!!isStreaming);
     if (isStreaming) {
       this.sendBtn.innerHTML = '⏹';
       this.sendBtn.title = 'Stop generating';
@@ -1008,10 +1298,6 @@ class AIAssistant {
       this.sendBtn.title = 'Send (Enter)';
       this.sendBtn.style.background = 'var(--accent-color)';
     }
-  }
-
-  scrollToBottom() {
-    this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
   }
 
   escapeHtml(str) {
@@ -1056,9 +1342,17 @@ class AgentThinkingPanel {
 
   isLive() { return !!this.el; }
 
+  // Thinking off ⇒ no panel, ever. Re-checked on every push so a level change
+  // takes effect immediately.
+  enabled() {
+    const a = this.assistant;
+    return !!(a && typeof a.thinkingEnabled === 'function' ? a.thinkingEnabled() : true);
+  }
+
   ensure() {
     if (this.el) return this.el;
     if (!this.host) return null;
+    if (!this.enabled()) return null;
 
     const el = document.createElement('div');
     el.className = 'think-panel';
@@ -1094,6 +1388,7 @@ class AgentThinkingPanel {
   }
 
   push(entry) {
+    if (!this.enabled()) { this.destroy(); return; }
     this.ensure();
     if (!this.el) return;
     this.step = Math.max(this.step, entry.step || 0);

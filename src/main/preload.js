@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openFiles: () => ipcRenderer.invoke('dialog:openFiles'),
   readDirectory: (dirPath) => ipcRenderer.invoke('fs:readDirectory', dirPath),
   readFile: (filePath) => ipcRenderer.invoke('fs:readFile', filePath),
+  readImage: (filePath) => ipcRenderer.invoke('fs:readImage', filePath),
+  writeBase64: (filePath, dataUrl) => ipcRenderer.invoke('fs:writeBase64', filePath, dataUrl),
+  generateImage: (opts) => ipcRenderer.invoke('ai:generateImage', opts),
   writeFile: (filePath, content) => ipcRenderer.invoke('fs:writeFile', filePath, content),
   createFile: (filePath) => ipcRenderer.invoke('fs:createFile', filePath),
   createDirectory: (dirPath) => ipcRenderer.invoke('fs:createDirectory', dirPath),
@@ -28,6 +31,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Settings (persisted in userData/settings.json)
   settingsGet: () => ipcRenderer.invoke('settings:get'),
+  storeRead: (name) => ipcRenderer.invoke('store:read', name),
+  storeWrite: (name, data) => ipcRenderer.invoke('store:write', name, data),
   settingsSet: (patch) => ipcRenderer.invoke('settings:set', patch),
 
   // Terminal

@@ -121,6 +121,8 @@
 }
 
 /* ------------------------------- popup ---------------------------------- */
+/* The popup is a column (optional filter box · scrollable list · footer);
+   only `.dd-list` scrolls, so the footer stays pinned. */
 
 .dd-menu {
   position: absolute;
@@ -129,8 +131,6 @@
   left: 0;
   min-width: 100%;
   max-width: 250px;
-  max-height: 220px;
-  overflow-y: auto;
   padding: 2px 0;
   background: var(--bg-sidebar, #252526);
   border: 1px solid var(--border-color, #3e3e42);
@@ -138,6 +138,63 @@
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.38);
   text-align: left;
   cursor: default;
+  display: flex;
+  flex-direction: column;
+}
+
+.dd-list {
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  padding: 2px 0;
+}
+
+/* Filter box for long lists (model menu) */
+.dd-search {
+  flex: 0 0 auto;
+  width: calc(100% - 12px);
+  margin: 4px 6px 3px;
+  padding: 4px 7px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-primary, #1f1f1f);
+  background: var(--bg-input, #ffffff);
+  border: 1px solid var(--border-color, #d4d4d4);
+  border-radius: 3px;
+  outline: none;
+}
+
+.dd-search::placeholder { color: var(--text-muted, #8a8a8a); }
+
+.dd-search:focus {
+  border-color: var(--accent-color, #007acc);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color, #007acc) 35%, transparent);
+}
+
+/* "showing X of Y" footer — proves the list was not silently truncated */
+.dd-foot {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-top: 1px solid var(--border-subtle, #e0e0e0);
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--text-secondary, #767676);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.dd-foot-filtered { color: var(--accent-color, #007acc); }
+
+/* Nothing matches the filter (popup still renders something useful) */
+.dd-empty-row {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-secondary, #767676);
+  font-style: italic;
+  overflow-wrap: anywhere;
 }
 
 html[data-theme="light"] .dd-menu {
@@ -157,6 +214,19 @@ html[data-theme="light"] .dd-item[aria-selected="true"] {
 }
 
 html[data-theme="light"] .dd-check { color: var(--accent-color, #007acc); }
+
+html[data-theme="light"] .dd-search {
+  background: #ffffff;
+  color: var(--text-primary, #1f1f1f);
+  border-color: #c8c8c8;
+}
+
+html[data-theme="light"] .dd-foot {
+  border-top-color: #e0e0e0;
+  color: #767676;
+}
+
+html[data-theme="light"] .dd-empty-row { color: #767676; }
 
 .dd-menu[hidden] {
   display: none;
@@ -199,7 +269,13 @@ html[data-theme="light"] .dd-check { color: var(--accent-color, #007acc); }
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+/* The autonomy-mode dropdown has no proxy <select>; give it a stable width so
+   the bar does not reflow between "Ask before changes" and "Fully auto". */
+.dd-mode .dd-trigger { max-width: 118px; }
+.dd-mode .dd-value { font-weight: 500; }
 
 /* Legacy native-select styling, kept for the (hidden) proxy + any old markup */
 .chat-ctl-select {
@@ -271,6 +347,24 @@ html[data-theme="light"] .dd-check { color: var(--accent-color, #007acc); }
 }
 
 /* --------------------------- attachment chips ---------------------------- */
+
+.attach-count {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-right: 2px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 15px;
+  font-weight: 600;
+  color: var(--accent-color, #007acc);
+  background: color-mix(in srgb, var(--accent-color, #007acc) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-color, #007acc) 35%, transparent);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+}
 
 .attach-chips {
   display: flex;
@@ -350,15 +444,19 @@ html[data-theme="light"] .dd-check { color: var(--accent-color, #007acc); }
 
 /* ------------------------------ scrollbars ------------------------------ */
 
-.dd-menu::-webkit-scrollbar { width: 8px; }
-.dd-menu::-webkit-scrollbar-thumb {
+.dd-menu::-webkit-scrollbar,
+.dd-list::-webkit-scrollbar { width: 8px; }
+.dd-menu::-webkit-scrollbar-thumb,
+.dd-list::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb, rgba(121, 121, 121, 0.4));
   border-radius: 4px;
 }
-.dd-menu::-webkit-scrollbar-thumb:hover {
+.dd-menu::-webkit-scrollbar-thumb:hover,
+.dd-list::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover, rgba(100, 100, 100, 0.7));
 }
-.dd-menu::-webkit-scrollbar-corner { background: transparent; }
+.dd-menu::-webkit-scrollbar-corner,
+.dd-list::-webkit-scrollbar-corner { background: transparent; }
 
 /* -------------------------- narrow panel (~260px) ------------------------ */
 
@@ -366,6 +464,8 @@ html[data-theme="light"] .dd-check { color: var(--accent-color, #007acc); }
   .dd { max-width: 108px; }
   .dd-trigger { font-size: 10.5px; padding: 0 3px 0 5px; }
   .dd-menu { max-width: 220px; }
+  .dd-list { max-height: 190px; }
+  .dd-mode .dd-trigger { max-width: 96px; }
   .chat-control-bar { gap: 3px; padding: 4px 4px 2px; }
 }
 
@@ -374,4 +474,6 @@ html[data-theme="light"] .dd-check { color: var(--accent-color, #007acc); }
   .dd { max-width: 74px; }
   .dd-value { font-size: 10px; }
   .dd-menu { max-width: 200px; }
+  .dd-list { max-height: 168px; }
+  .dd-foot { font-size: 9.5px; }
 }

@@ -16,7 +16,48 @@ class FileExplorer {
     this.fileChangeTimer = null;
     this._ctxBound = false;
 
+    // render() re-entrancy guard: a filesystem event storm (git checkout, a
+    // bulk agent write, ...) must not interleave tree rebuilds.
+    this._rendering = false;
+    this._renderQueued = false;
+
     this.bindWorkspaceChanges();
+    this.ensureHeaderActions();
+  }
+
+  /* ====================================================================== */
+  /* Header actions                                                         */
+  /* ====================================================================== */
+
+  /**
+   * VS Code shows an "Open Folder" action in the Explorer title bar next to
+   * New File / New Folder / Refresh. The static markup cannot contain it (it
+   * is built once per view), so we append it here - idempotently, and always
+   * *after* the existing buttons so none of them are displaced.
+   */
+  ensureHeaderActions() {
+    let actions = null;
+    try {
+      actions = document.querySelector('#explorer-view .sidebar-header .actions');
+    } catch (e) { return null; }
+    if (!actions) return null;
+    if (document.getElementById('explorer-open-folder-btn')) return actions;
+
+    const btn = document.createElement('button');
+    btn.className = 'icon-btn explorer-header-btn';
+    btn.id = 'explorer-open-folder-btn';
+    btn.title = 'Open Folder';
+    btn.setAttribute('aria-label', 'Open Folder');
+    btn.innerHTML =
+      '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">' +
+      '<path d="M14.5 3H7.71l-.85-.85A.5.5 0 0 0 6.5 2h-5A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-8A1.5 1.5 0 0 0 14.5 3zm-2 4.5H10v1.5h1.5v1.5H10V12H8.5v-1.5H7V9h1.5V7.5H10V9h2.5z"/>' +
+      '</svg>';
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      this.openFolder(); // no argument -> native folder picker
+    };
+    actions.appendChild(btn);
+    return actions;
   }
 
   /* ====================================================================== */
@@ -42,17 +83,10 @@ class FileExplorer {
     this.selectedFile = null;
     this.closeContextMenu();
 
-    const name = String(folderPath).split(/[\\/]/).filter(Boolean).pop() || String(folderPath);
+    // Make sure the header has the Open Folder action in every layout.
+    this.ensureHeaderActions();
 
-    // The "no folder open" screen must disappear as soon as a folder is opened.
-    const empty = document.getElementById('empty-state');
-    if (empty) empty.style.display = 'none';
-
-    // VS Code-style: folder name in the Explorer header and the window title.
-    const header = document.querySelector('#explorer-view .sidebar-header > span');
-    if (header) header.textContent = name.toUpperCase();
-    const title = document.getElementById('active-file-title');
-    if (title) title.textContent = name;
+    this.applyWorkspaceLabels(folderPath);
 
     // Re-index files for the command palette / @-mentions / agent.
     try { if (window.palette && window.palette.refreshFiles) window.palette.refreshFiles(); } catch (e) {}
@@ -66,6 +100,71 @@ class FileExplorer {
   /** The folder header buttons / actions should act on. Falls back to root. */
   targetDir() {
     return this.selectedDir || this.rootPath || null;
+  }
+
+  /**
+   * Reflect the workspace folder name in the Explorer header + the title bar.
+   * Called by openFolder() and closeFolder() only.
+   */
+  applyWorkspaceLabels(folderPath) {
+    if (folderPath) {
+      const name = String(folderPath).split(/[\\/]/).filter(Boolean).pop() || String(folderPath);
+      const empty = document.getElementById('empty-state');
+      if (empty) empty.style.display = 'none';
+      const header = document.querySelector('#explorer-view .sidebar-header > span');
+      if (header) header.textContent = name.toUpperCase();
+      const title = document.getElementById('active-file-title');
+      if (title) title.textContent = name;
+    } else {
+      const empty = document.getElementById('empty-state');
+      if (empty) empty.style.display = '';
+      const header = document.querySelector('#explorer-view .sidebar-header > span');
+      if (header) header.textContent = 'EXPLORER';
+      const title = document.getElementById('active-file-title');
+      if (title) title.textContent = 'Cloud Code - AI Code Editor';
+    }
+  }
+
+  /**
+   * "Close Folder" (VS Code parity).
+   *
+   * IMPORTANT: this detaches the workspace *in the UI only*. Nothing on disk
+   * is touched - no deletePath / rm / rename is ever called here - it just
+   * forgets the root, stops the watcher and renders the "no folder" state.
+   */
+  async closeFolder() {
+    const name = this.rootPath ? this.baseName(this.rootPath) : 'the current folder';
+    const ok = confirm(
+      'Close the folder "' + name + '"?\n\n' +
+      'The folder stays on disk - only this window stops working on it.'
+    );
+    if (!ok) return false;
+
+    const hadFolder = !!this.rootPath;
+
+    // Stop watching before dropping the root, so no stale event re-renders.
+    try {
+      if (hadFolder && window.fileWatcher && typeof window.fileWatcher.stop === 'function') {
+        window.fileWatcher.stop();
+      }
+    } catch (e) { /* watcher is optional */ }
+
+    this.closeContextMenu();
+
+    // Reset the workspace state (UI only).
+    this.rootPath = null;
+    this.selectedDir = null;
+    this.selectedFile = null;
+    this.expandedDirs.clear();
+
+    // Reset the header / title and paint the "no folder" state.
+    this.applyWorkspaceLabels(null);
+    this.ensureHeaderActions();
+    await this.render();
+
+    // Re-index so @-mentions / palette stop offering the old folder's files.
+    try { if (window.palette && window.palette.refreshFiles) window.palette.refreshFiles(); } catch (e) {}
+    return true;
   }
 
   /* ====================================================================== */
@@ -94,16 +193,37 @@ class FileExplorer {
   /* Rendering                                                              */
   /* ====================================================================== */
 
+  /**
+   * Re-entrancy-safe render. Concurrent calls (a burst of
+   * `workspace:files-changed` events during a git checkout) collapse into a
+   * single rebuild plus at most one queued follow-up, so the tree never
+   * thrashes or interleaves two async walks of the same container.
+   */
   async render() {
+    if (this._rendering) { this._renderQueued = true; return this._renderPromise || Promise.resolve(); }
+    this._rendering = true;
+    this._renderPromise = this._render().finally(() => {
+      this._rendering = false;
+      this._renderPromise = null;
+      if (this._renderQueued) {
+        this._renderQueued = false;
+        this.render().catch((e) => console.error('Explorer queued re-render failed:', e));
+      }
+    });
+    return this._renderPromise;
+  }
+
+  async _render() {
     this.closeContextMenu();
+
+    // NOTE (safety): a closed *editor tab* must never look like a closed
+    // *folder*. Nothing in this method - and nothing else in this class -
+    // derives `rootPath` from "is a file open"; only openFolder() sets it and
+    // only closeFolder() clears it. So when the editor drops its last tab and
+    // shows its own empty screen, the tree below is re-rendered unchanged.
     if (!this.rootPath) {
       // Back to the empty IDE: restore the "no folder" screen and labels.
-      const empty = document.getElementById('empty-state');
-      if (empty) empty.style.display = '';
-      const header = document.querySelector('#explorer-view .sidebar-header > span');
-      if (header) header.textContent = 'EXPLORER';
-      const title = document.getElementById('active-file-title');
-      if (title) title.textContent = 'Cloud Code - AI Code Editor';
+      this.applyWorkspaceLabels(null);
 
       this.selectedDir = null;
       this.selectedFile = null;
@@ -134,8 +254,19 @@ class FileExplorer {
       this.selectedFile = null;
     }
 
-    this.container.innerHTML = '';
+    // Build the new tree BEFORE touching the DOM: if the root read fails we
+    // keep the previously rendered tree and only append a note.
     const rootTree = await this.buildTree(this.rootPath);
+
+    if (rootTree.querySelector('.explorer-read-error') && this.container.childNodes.length) {
+      // Transient failure at the root level - do not blank the sidebar.
+      const stale = this.container.querySelector('.explorer-read-error');
+      if (stale) stale.parentNode.removeChild(stale);
+      this.container.appendChild(this.readErrorNote(this.rootPath));
+      return;
+    }
+
+    this.container.innerHTML = '';
     this.container.appendChild(rootTree);
   }
 
@@ -207,7 +338,7 @@ class FileExplorer {
     try {
       const entries = await window.electronAPI.readDirectory(dirPath);
 
-      for (const entry of entries) {
+      for (const entry of this.sortEntries(entries || [])) {
         // Skip heavy or hidden directories
         if (entry.name === 'node_modules' || entry.name === '.git') {
           continue;
@@ -281,10 +412,44 @@ class FileExplorer {
         }
       }
     } catch (err) {
-      console.error('Error listing directory:', err);
+      // A transient read failure must NOT blank the tree: keep whatever was
+      // already rendered and add a small inline note instead.
+      console.error('Error listing directory:', dirPath, err);
+      listContainer.appendChild(this.readErrorNote(dirPath));
     }
 
     return listContainer;
+  }
+
+  /** Small, non-blocking "could not read folder" row (explorer-* namespace). */
+  readErrorNote(dirPath) {
+    const note = document.createElement('div');
+    note.className = 'explorer-read-error';
+    note.setAttribute('role', 'status');
+    note.textContent = 'Could not read "' + this.baseName(dirPath) + '" \u2014 click Refresh to retry.';
+    return note;
+  }
+
+  /**
+   * VS Code ordering: folders first, then files, each alphabetical and
+   * case-insensitive. Ties (e.g. "A" vs "a") keep a stable, deterministic
+   * fallback so two consecutive renders never shuffle the rows.
+   */
+  sortEntries(entries) {
+    return entries.slice().sort((a, b) => {
+      const ad = a.isDirectory ? 0 : 1;
+      const bd = b.isDirectory ? 0 : 1;
+      if (ad !== bd) return ad - bd;               // folders before files
+      const an = String(a.name || '').toLowerCase();
+      const bn = String(b.name || '').toLowerCase();
+      if (an < bn) return -1;
+      if (an > bn) return 1;
+      const aRaw = String(a.name || '');
+      const bRaw = String(b.name || '');
+      if (aRaw < bRaw) return -1;                  // deterministic tie-break
+      if (aRaw > bRaw) return 1;
+      return 0;
+    });
   }
 
   hoverButton(title, glyph, onClick) {
@@ -357,15 +522,43 @@ class FileExplorer {
         ];
 
     if (isDir) {
-      // "Reveal in Explorer" only when the bridge actually exposes it.
-      if (window.electronAPI && window.electronAPI.shellShowItemInFolder) {
-        items.push({ sep: true }, { id: 'reveal', label: 'Reveal in Explorer' });
+      // "Reveal in Explorer" only when the bridge actually exposes it - the
+      // preload surface can change between builds, so check at runtime.
+      if (this.canRevealInFolder()) {
+        items.push({ id: 'reveal', label: 'Reveal in Explorer' });
       }
       items.push({ sep: true }, { id: 'delete', label: 'Delete Folder', danger: true });
+
+      // --- workspace-level actions ---------------------------------------
+      // Appended (never replacing what is above) to match VS Code: the
+      // folder menu ends with Reveal / Open Folder / Close Folder.
+      items.push(
+        { sep: true },
+        { id: 'openFolder', label: 'Open Folder\u2026' },
+        { id: 'closeFolder', label: 'Close Folder' }
+      );
     } else {
       items.push({ sep: true }, { id: 'delete', label: 'Delete', danger: true });
     }
     return items;
+  }
+
+  /** Runtime capability check for "Reveal in Explorer". */
+  canRevealInFolder() {
+    try {
+      return !!(window.electronAPI && typeof window.electronAPI.shellShowItemInFolder === 'function');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** Runtime capability check for the native folder picker. */
+  canOpenFolder() {
+    try {
+      return !!(window.electronAPI && typeof window.electronAPI.openDirectory === 'function');
+    } catch (e) {
+      return false;
+    }
   }
 
   showContextMenu(kind, entry, x, y) {
@@ -405,10 +598,20 @@ class FileExplorer {
     const rect = menu.getBoundingClientRect ? menu.getBoundingClientRect() : { width: 160, height: 200 };
     const vw = (typeof window !== 'undefined' && window.innerWidth) || 1024;
     const vh = (typeof window !== 'undefined' && window.innerHeight) || 768;
-    const left = Math.max(4, Math.min(x || 0, vw - rect.width - 4));
-    const top = Math.max(4, Math.min(y || 0, vh - rect.height - 4));
+    // Keep the popup fully on-screen: clamp horizontally, and flip *upwards*
+    // (anchored to its bottom edge) when it would overflow the viewport.
+    const left = Math.max(4, Math.min(x || 0, Math.max(4, vw - rect.width - 4)));
+    let top = y || 0;
+    if (top + rect.height > vh - 4) {
+      top = Math.max(4, vh - rect.height - 4); // flip up / clamp to the bottom
+      menu.classList.add('ctx-menu-flip-up');
+      menu.style.top = top + 'px';
+      menu.style.transformOrigin = 'bottom ' + Math.max(0, (y || 0) - top) + 'px';
+    } else {
+      top = Math.max(4, top);
+      menu.style.top = top + 'px';
+    }
     menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
 
     this.bindMenuDismissers();
     this.setActiveItem(-1);
@@ -501,6 +704,8 @@ class FileExplorer {
       case 'copyPath':  return this.copyPath(t.path);
       case 'refresh':   return this.refresh();
       case 'reveal':    return this.revealInFolder(t.path);
+      case 'openFolder': return this.openFolder();     // native picker
+      case 'closeFolder': return this.closeFolder();   // UI-only detach
       case 'delete':    return t.kind === 'dir' ? this.deleteFolder(t) : this.deleteFile(t);
       default:          return Promise.resolve();
     }
@@ -514,6 +719,11 @@ class FileExplorer {
   /* Creation (header buttons -> selected folder, else root)               */
   /* ====================================================================== */
 
+  /**
+   * Header "New File" - creates inside the selected folder, falling back to
+   * the workspace root (VS Code parity). `selectedDir` may be a nested folder
+   * because folder rows are click-to-select.
+   */
   async createNewFile() {
     const dir = this.targetDir();
     if (!dir) {
@@ -523,6 +733,7 @@ class FileExplorer {
     return this.createNewFileIn(dir);
   }
 
+  /** Header "New Folder" - same target resolution as createNewFile(). */
   async createNewFolder() {
     const dir = this.targetDir();
     if (!dir) {
@@ -539,8 +750,9 @@ class FileExplorer {
       alert('Please open a folder first!');
       return;
     }
-    // NOTE: Electron does not implement window.prompt(), so we use our own dialog.
-    const name = await this.askName('New file name', '');
+    // NOTE: Electron does not implement window.prompt(), so we use our own
+    // dialog. It pre-selects the *basename* so typing replaces it (VS Code).
+    const name = await this.askName('New file name', '', { okLabel: 'Create' });
     if (!name) return;
 
     const clean = this.normalizeRelative(name);
@@ -560,12 +772,40 @@ class FileExplorer {
         }
       }
       await window.electronAPI.createFile(filePath);
-      this.selectedDir = base;
+
+      // VS Code: the new file becomes the active selection, its folder chain
+      // stays expanded (never collapse after a create), and it opens.
+      this.selectedFile = filePath;
+      this.selectedDir = this.parentOf(filePath) || base;
+      this.expandChainTo(filePath);
+
       await this.render();
+
+      // Open it in the editor AFTER the tree is painted so the selection is
+      // visible when the tab appears.
       if (window.editor) window.editor.openFile(filePath, '');
     } catch (err) {
       alert('Error creating file: ' + ((err && err.message) || err));
     }
+  }
+
+  /**
+   * Expand the workspace root and every folder down to `path` so a freshly
+   * created nested entry ("a/b/c.txt") is visible without manual clicking.
+   */
+  expandChainTo(path) {
+    const p = String(path).replace(/\\/g, '/');
+    if (!this.rootPath) return;
+    let cur = this.parentOf(p);
+    const root = String(this.rootPath).replace(/\\/g, '/').replace(/\/$/, '');
+    // Walk up to the root, adding each ancestor, then add the root itself.
+    while (cur && cur !== root && cur.length > root.length && this.isInsideRoot(cur)) {
+      this.expandedDirs.add(cur);
+      const up = this.parentOf(cur);
+      if (up === cur) break;
+      cur = up;
+    }
+    if (this.isInsideRoot(root)) this.expandedDirs.add(root);
   }
 
   /** Create a folder *inside* `dir` (default: the selected folder / root). */
@@ -575,7 +815,7 @@ class FileExplorer {
       alert('Please open a folder first!');
       return;
     }
-    const name = await this.askName('New folder name', '');
+    const name = await this.askName('New folder name', '', { okLabel: 'Create' });
     if (!name) return;
 
     const clean = this.normalizeRelative(name);
@@ -587,12 +827,24 @@ class FileExplorer {
     const dirPath = this.joinPath(base, clean);
     try {
       await window.electronAPI.createDirectory(dirPath);
-      this.selectedDir = base;
+
+      // VS Code: the new folder stays expanded AND the cursor lands inside it
+      // so the user can immediately create the first file. Never collapse.
+      this.expandChainTo(dirPath);
+      this.expandedDirs.add(dirPath);
+      this.selectedDir = dirPath;
+      this.selectedFile = null;
+
       await this.render();
+      // The cursor is now *inside* the new folder (selectedDir === dirPath),
+      // so the header New File button and the tree hover action both create
+      // there - no extra modal, no manual clicking.
     } catch (err) {
       alert('Error creating folder: ' + ((err && err.message) || err));
     }
   }
+
+  
 
   /* ====================================================================== */
   /* Rename / duplicate / delete / copy                                     */
@@ -604,7 +856,11 @@ class FileExplorer {
       ? target.name
       : this.extOf(target.name) ? target.name.slice(0, -this.extOf(target.name).length) : target.name;
 
-    const name = await this.askName('Rename ' + (target.kind === 'dir' ? 'folder' : 'file'), suggested);
+    const name = await this.askName(
+      'Rename ' + (target.kind === 'dir' ? 'folder' : 'file'),
+      suggested,
+      { okLabel: 'Rename' }
+    );
     if (!name) return;
 
     const clean = this.normalizeRelative(name);
@@ -725,7 +981,8 @@ class FileExplorer {
    * VS Code-style single-line input. Electron has no window.prompt(), so the
    * explorer used to silently do nothing when New File / New Folder was clicked.
    */
-  askName(title, defaultValue) {
+  askName(title, defaultValue, options) {
+    const opts = options || {};
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
       overlay.className = 'cc-dialog-overlay';
@@ -740,10 +997,32 @@ class FileExplorer {
           </div>
         </div>`;
       overlay.querySelector('.cc-dialog-title').textContent = title;
+      const okBtn = overlay.querySelector('[data-act="ok"]');
+      if (okBtn && opts.okLabel) okBtn.textContent = opts.okLabel;
+
       const input = overlay.querySelector('.cc-dialog-input');
-      input.value = defaultValue || '';
+      const initial = defaultValue || '';
+      input.value = initial;
       document.body.appendChild(overlay);
-      setTimeout(() => { input.focus(); input.select(); }, 30);
+
+      // VS Code behaviour: pre-fill the suggested name but select only the
+      // *stem* ("utils.js" -> "utils" selected) so typing replaces the name
+      // while the extension survives. With no suggestion, start empty with the
+      // caret at position 0. If there is no extension, select the whole stem.
+      const dot = initial.lastIndexOf('.');
+      const stemEnd = dot > 0 ? dot : initial.length;
+      const selectEnd = opts.selectStem === false ? 0 : stemEnd;
+      // Recorded for tests / assertions.
+      this._lastAskSelection = { start: 0, end: selectEnd, value: initial };
+      setTimeout(() => {
+        input.focus();
+        if (typeof input.setSelectionRange === 'function') {
+          // Selection 0..stemEnd, so the caret ends up right after the stem.
+          input.setSelectionRange(0, selectEnd);
+        } else if (typeof input.select === 'function' && selectEnd > 0) {
+          input.select();
+        }
+      }, 30);
 
       let settled = false;
       const done = (value) => {
