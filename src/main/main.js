@@ -7,6 +7,38 @@ const { spawn } = require('child_process');
 const https = require('https');
 const http = require('http');
 
+// ---------------------------------------------------------------------------
+// AI engine — the single source of truth for the tool-call protocol and the
+// backend client. Everything degrades to the built-in implementation if these
+// modules are unavailable.
+// ---------------------------------------------------------------------------
+let EngineProtocol = null;
+let EngineClient = null;
+try {
+  EngineProtocol = require('../ai-engine/core/protocol.js');
+  EngineClient = require('../ai-engine/main/client.js');
+} catch (e) {
+  console.warn('AI engine modules unavailable, using built-in fallbacks:', e.message);
+}
+
+let aiClient = null;
+function getAiClient() {
+  if (!EngineClient) return null;
+  if (!aiClient) {
+    try {
+      aiClient = EngineClient.createAiClient({
+        baseUrl: aiBaseUrl,
+        apiKey: aiApiKey,
+        model: aiModel
+      });
+    } catch (e) {
+      console.warn('AI client init failed:', e.message);
+      return null;
+    }
+  }
+  return aiClient;
+}
+
 // Load private configuration safely
 let envConfig = {};
 try {
@@ -263,6 +295,46 @@ ipcMain.handle('shell:showItemInFolder', async (event, targetPath) => {
 });
 
 // ---------------------------------------------------------------------------
+// System facts for the agent: real environment variables + machine info.
+// Secrets are masked so they are never echoed into a chat transcript.
+// ---------------------------------------------------------------------------
+const SENSITIVE_ENV = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|SESSION|COOKIE/i;
+
+ipcMain.handle('sys:info', async () => {
+  try {
+    const env = {};
+    const keys = Object.keys(process.env).sort();
+    for (const k of keys) {
+      const v = process.env[k] == null ? '' : String(process.env[k]);
+      env[k] = SENSITIVE_ENV.test(k) ? (v.slice(0, 2) + '***') : v.slice(0, 2000);
+    }
+    return {
+      ok: true,
+      env,
+      envCount: keys.length,
+      system: {
+        platform: process.platform,
+        arch: process.arch,
+        release: process.getSystemVersion ? process.getSystemVersion() : os.release(),
+        hostname: os.hostname(),
+        homedir: os.homedir(),
+        tmpdir: os.tmpdir(),
+        cwd: process.cwd(),
+        cpus: os.cpus().length,
+        totalMemMB: Math.round(os.totalmem() / (1024 * 1024)),
+        freeMemMB: Math.round(os.freemem() / (1024 * 1024)),
+        node: process.versions.node,
+        electron: process.versions.electron || null,
+        chrome: process.versions.chrome || null,
+        appVersion: (() => { try { return app.getVersion(); } catch (e) { return null; } })()
+      }
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Images — preview support (no npm dependency needed: data URLs + base64) and
 // an optional OpenAI-compatible image-generation endpoint.
 // ---------------------------------------------------------------------------
@@ -310,6 +382,16 @@ ipcMain.handle('fs:writeBase64', async (event, filePath, dataUrl) => {
 });
 
 ipcMain.handle('ai:generateImage', async (event, opts = {}) => {
+  // Prefer the engine client (single implementation, unit tested).
+  const client = getAiClient();
+  if (client) {
+    try {
+      const r = await client.generateImage(opts);
+      if (r && !r.error) return r;
+    } catch (e) {
+      console.warn('generateImage via engine failed, using fallback:', e.message);
+    }
+  }
   const prompt = String(opts.prompt || '').trim();
   if (!prompt) return { error: 'A prompt is required.' };
   try {
@@ -591,6 +673,15 @@ ipcMain.handle('ai:updateConfig', (event, config) => {
   if (config.baseUrl) aiBaseUrl = config.baseUrl.trim().replace(/\/+$/, '');
   if (config.apiKey && !config.apiKey.includes('••••')) aiApiKey = config.apiKey.trim();
   if (config.model) aiModel = config.model.trim();
+  if (aiClient) {
+    try {
+      aiClient.setConfig({
+        baseUrl: aiBaseUrl,
+        apiKey: aiApiKey,
+        model: aiModel
+      });
+    } catch (e) { /* client keeps its old config */ }
+  }
   appSettings.aiBaseUrl = aiBaseUrl;
   appSettings.aiApiKey = aiApiKey;
   appSettings.aiModel = aiModel;
@@ -646,6 +737,15 @@ ipcMain.handle('store:write', async (event, name, data) => {
 });
 
 ipcMain.handle('ai:listModels', async () => {
+  // Prefer the engine client (single implementation, unit tested).
+  const client = getAiClient();
+  if (client) {
+    try {
+      return await client.listModels();
+    } catch (e) {
+      console.warn('listModels via engine failed, using fallback:', e.message);
+    }
+  }
   try {
     const url = new URL(`${aiBaseUrl}/models`);
     const isHttps = url.protocol === 'https:';
@@ -1103,7 +1203,9 @@ function requestChatOnce(id, payload, includeTools) {
             if (!toolCalls.length) {
               const m = content.match(/<<<TOOL>>>\s*([\s\S]*?)\s*<<<END>>>/);
               if (m) {
-                const j = parseToolPayload(m[1]);
+                // Engine protocol is the single source of truth when available.
+                const parse = (EngineProtocol && EngineProtocol.parseToolPayload) || parseToolPayload;
+                const j = parse(m[1]);
                 if (j) {
                   toolCalls.push({
                     id: `fb_${toolCalls.length}`,

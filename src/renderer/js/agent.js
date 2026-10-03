@@ -158,49 +158,208 @@ const AGENT_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          command: { type: 'string', description: 'The command line to execute (e.g. "npm test", "dir", "python app.py").' }
+          command: { type: 'string', description: 'The command line to execute (e.g. "npm test", "dir", "python app.py").' },
+          timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default 60000, max 600000).' }
         },
         required: ['command']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_files',
+      description: 'Read MANY text files in one call. Use this when the user asks you to read all files in a folder (or all files matching a glob) — it returns them concatenated with "=== path ===" separators under a character budget.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File or folder to read (workspace-relative). A folder is read recursively.' },
+          glob: { type: 'string', description: 'Only read files matching this glob, e.g. "*.js" or "**/*.test.js".' },
+          limit: { type: 'number', description: 'Maximum number of files (default 20, max 200).' },
+          max_chars: { type: 'number', description: 'Total character budget for the whole result (default 60000, max 200000).' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_files',
+      description: 'Delete MANY files and/or folders in ONE call. Accepts {"paths":["a.js","b.js"]}, a single {"path":"src/old"} (deleted recursively), or {"path":"logs","glob":"*.log"}. Empty folders are removed too. Every deleted file is recorded so "Revert" restores it. Destructive: always routed through the user approval gate.',
+      parameters: {
+        type: 'object',
+        properties: {
+          paths: { type: 'array', items: { type: 'string' }, description: 'Workspace-relative file or folder paths to delete.' },
+          path: { type: 'string', description: 'A single file/folder path, or the folder to search when "glob" is given.' },
+          glob: { type: 'string', description: 'Delete every file matching this glob under "path" (e.g. "*.log").' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'move_files',
+      description: 'Move or rename MANY files/folders in ONE call. Accepts {"files":[{"from":"a","to":"b"}]}, {"from":"src/x","to":"backup/x"}, or {"path":"logs/*.log","to":"archive/"} (a folder destination keeps the original file names). Destination folders are created automatically; an existing destination is only replaced when overwrite is true. Tracked for revert.',
+      parameters: {
+        type: 'object',
+        properties: {
+          files: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] }, description: 'Explicit from/to pairs.' },
+          from: { type: 'string', description: 'Single source path.' },
+          to: { type: 'string', description: 'Single destination path (ends with "/" or names a folder to keep base names).' },
+          path: { type: 'string', description: 'Glob pattern selecting the sources, e.g. "logs/*.log".' },
+          overwrite: { type: 'boolean', description: 'Allow replacing an existing destination (default false).' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_env',
+      description: 'Inspect the environment: one variable by {"name":"PATH"}, or a filtered/capped dump with {"all":true} plus a short system summary (platform, cwd, project name/version, detected node/electron versions). Values come from the workspace .env files and the system summary; no new IPC is used.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'A single variable name (case-insensitive).' },
+          all: { type: 'boolean', description: 'Dump all discovered variables (capped at 200 entries).' },
+          filter: { type: 'string', description: 'Only include variables whose name contains this substring.' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remember',
+      description: 'Store a durable fact for future conversations (user preferences, project conventions, decisions). Use sparingly, only for things that stay true later.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The fact to remember, written as a short standalone sentence.' },
+          tags: { type: 'array', items: { type: 'string' }, description: 'Optional category tags, e.g. ["prefs","build"].' }
+        },
+        required: ['text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'recall',
+      description: 'Search long-term memory for previously stored facts relevant to the current task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What to look for.' },
+          limit: { type: 'number', description: 'Maximum memories to return (default 5, max 20).' }
+        },
+        required: ['query']
       }
     }
   }
 ];
 
-const READONLY_TOOLS = new Set(['list_dir', 'read_file', 'search_code']);
+const READONLY_TOOLS = new Set([
+  'list_dir', 'read_file', 'search_code', 'read_files', 'read_env', 'recall'
+]);
 const TOOL_ICONS = {
   list_dir: '📁', read_file: '📖', search_code: '🔎',
   edit_file: '✏️', write_file: '📝', run_command: '🖥️',
-  delete_file: '🗑️', move_file: '📦'
+  delete_file: '🗑️', move_file: '📦',
+  list_tree: '🗂', find_files: '🔍',
+  read_files: '📚', delete_files: '🧹', move_files: '📦',
+  read_env: '🌱', remember: '🧠', recall: '🧠'
 };
 const TOOL_TITLES = {
   list_dir: 'List directory', read_file: 'Read file', search_code: 'Search code',
   edit_file: 'Edit file', write_file: 'Write file', run_command: 'Run command',
-  delete_file: 'Delete file or folder', move_file: 'Move / rename'
+  delete_file: 'Delete file or folder', move_file: 'Move / rename',
+  list_tree: 'Show folder tree', find_files: 'Find files by name',
+  read_files: 'Read many files', delete_files: 'Delete files', move_files: 'Move / rename files',
+  read_env: 'Read environment', remember: 'Remember', recall: 'Recall'
 };
 
 /** Characters that only ever appear in decorative ASCII art, never in prose. */
 const BOX_CHARS = /[\u2500-\u257F\u2580-\u259F\u25A0-\u25FF\u2B00-\u2BFF\u2190-\u21FF]/;
 /** A line made exclusively of ASCII graphic/punctuation characters. */
-const ASCII_ART_LINE = /^[!-/:-@[-`{-~]{4,}$/;
+const ASCII_ART_LINE = /^[!-/:-@[-`{-~]{3,}$/;
+/** Block/bar glyphs used by fake bar charts and sparklines. */
+const BAR_GLYPHS = /[\u2581-\u258F\u2591-\u2593\u25A0-\u25FF\u2800-\u28FF\u{1F3B2}\u{1F53C}\u{1F53D}]/u;
+/** A line that carries at least one bar glyph and is mostly bars/spaces/labels. */
+const BAR_LINE = /^[^\n]*?[%0-9A-Za-z ,.:()\-+#]{0,12}\s*[\u2581-\u258F\u2591-\u2593\u25A0-\u25FF]{2,}[^\n]*$/u;
+/** `+-----+-----+` style table borders (real markdown tables use `|`). */
+const ASCII_TABLE_BORDER = /^\+[-+|=]*\+$/;
+/** Lines made only of bullet glyphs: `●●●●`, `◆`, `▪▪▪▪`. */
+const BULLET_RUN = /^[●◆▪▫◻◼■□▶►➤•·*]+$/u;
+/** Fenced blocks whose info string renders as broken ASCII art in this panel. */
+const GRAPH_FENCE = /^[ \t]*(?:```|~~~)[ \t]*(mermaid|dot|graphviz|plantuml|vega|vega-lite|chart)\b[^\n]*$[\s\S]*?^[ \t]*(?:```|~~~)[ \t]*$/gim;
+/** One line, judge function shared by the fence-aware filter. */
+function isDecorativeLine(t) {
+  if (!t) return false;
+  if (ASCII_TABLE_BORDER.test(t)) return true;
+  // markdown table rows (and their `|---|---|` separators) are legitimate
+  if (t.indexOf('|') !== -1) return false;
+  if (BULLET_RUN.test(t)) return true;
+  if (BAR_GLYPHS.test(t) && BAR_LINE.test(t)) return true;
+  return BOX_CHARS.test(t) || ASCII_ART_LINE.test(t);
+}
 
 /**
  * stripAsciiDecoration(text)
- * Removes decorative-only lines (box drawing, ──────, ======, ~~~~, ASCII
- * graph bars/boxes) from model prose and collapses runs of blank lines to one.
- * Applied ONLY to agent-authored summary/notice text — never to tool output or
- * file contents, which may legitimately contain such characters.
+ * Removes decorative-only content (graph-language fenced blocks, box drawing,
+ * ──────, ======, ~~~~, ▁▂▃ sparklines, ████ 60% bars, +---+ borders, runs of
+ * ●/◆ bullets) from model prose, keeping prose, code and real markdown tables
+ * (which use `|`). Applied ONLY to agent-authored text — never to tool output
+ * or file contents, which may legitimately contain such characters.
  */
 function stripAsciiDecoration(text) {
+  // The engine owns this filter; keep the local copy as a fallback.
+  const eng = (typeof window !== 'undefined' && window.CloudAI && window.CloudAI.protocol) || null;
+  if (eng && typeof eng.stripAsciiDecoration === 'function') {
+    try {
+      return eng.stripAsciiDecoration(text);
+    } catch (e) {
+      /* fall through to the local implementation */
+    }
+  }
   if (typeof text !== 'string' || !text) return '';
+  // 1. whole graph/diagram blocks — they can never render correctly here
+  const withoutGraphs = text.replace(GRAPH_FENCE, '\n[diagram omitted]\n');
+  // 2. line-level decoration
   const out = [];
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of withoutGraphs.split(/\r?\n/)) {
     const t = raw.trim();
-    // markdown table rows (and their `|---|---|` separators) are legitimate
-    const isTableRow = t.indexOf('|') !== -1;
-    if (t && !isTableRow && (BOX_CHARS.test(t) || ASCII_ART_LINE.test(t))) continue;
+    if (isDecorativeLine(t)) continue;
     out.push(raw.replace(/\s+$/, ''));
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * stripLeadingThinking(text)
+ * When "Think: Off" is set the model still sometimes narrates its reasoning in
+ * the answer itself ("Let me think…", "First, I'll…", "Okay, so…"). Drop those
+ * leading paragraphs; never touch the rest.
+ */
+const THINKING_OPENERS = /^(let me|i(?:'| a)?m |first[,!]?|okay[,!]?|ok[,!]?|hmm|alright|now[,!]?|to (?:do|start|figure|solve)|i need to (?:check|find|look)|the (?:user|request) (?:asks|wants)|so[,!]?|well[,!]?)\b/i;
+function stripLeadingThinking(text) {
+  if (typeof text !== 'string' || !text.trim()) return typeof text === 'string' ? text : '';
+  const lines = text.split(/\r?\n/);
+  let i = 0;
+  let dropped = 0;
+  while (i < lines.length) {
+    const t = lines[i].trim();
+    if (!t) { i++; if (dropped) dropped++; continue; }
+    if (dropped) break;                                  // answer has started
+    if (THINKING_OPENERS.test(t)) { i++; dropped = 1; continue; }
+    break;
+  }
+  return dropped ? lines.slice(i).join('\n').replace(/^\s*\n/, '').trim() : text.trim();
 }
 
 /** Collapse control characters and clamp a model line to a readable length. */
@@ -313,6 +472,12 @@ class AgentController {
     if (modeSelect) {
       modeSelect.addEventListener('change', () => {
         if (window.AppSettings) window.AppSettings.set('agentMode', modeSelect.value);
+        // Let the chat control bar's autonomy dropdown follow this control.
+        try {
+          window.dispatchEvent(new CustomEvent('agent:mode-changed', {
+            detail: { mode: modeSelect.value }
+          }));
+        } catch (e) { /* CustomEvent unavailable */ }
       });
       document.addEventListener('settings-changed', () => {
         const v = window.AppSettings ? window.AppSettings.get('agentMode') : 'ask';
@@ -449,91 +614,123 @@ class AgentController {
   buildSystemPrompt(root) {
     const today = new Date().toISOString().slice(0, 10);
     const thinkLevel = window.AppSettings ? window.AppSettings.get('thinkLevel') : 'medium';
+    const off = thinkLevel === 'off';
+    this.thinkOff = off;
     let thinkLine;
-    switch (thinkLevel) {
-      case 'off': thinkLine = 'Reasoning effort: OFF — go straight to the answer, minimal exploration.'; break;
-      case 'low': thinkLine = 'Reasoning effort: LOW — act directly and efficiently, avoid unnecessary exploration.'; break;
-      case 'high': thinkLine = 'Reasoning effort: HIGH — plan carefully, verify your work with tools before answering, and consider edge cases.'; break;
-      default: thinkLine = 'Reasoning effort: MEDIUM — brief deliberation, then act.';
+    if (off) {
+      thinkLine = [
+        '## THINKING IS OFF — MANDATORY',
+        'Answer with the RESULT ONLY. Absolutely no reasoning narration: do not write "Let me think",',
+        '"First I\'ll", "Okay, so", do not restate the question, do not describe your plan before acting,',
+        'do not explain what you are about to do. Go straight to the answer or straight to the tool call.'
+      ].join('\n');
+    } else {
+      switch (thinkLevel) {
+        case 'low': thinkLine = 'Reasoning effort: LOW — act directly and efficiently, avoid unnecessary exploration.'; break;
+        case 'high': thinkLine = 'Reasoning effort: HIGH — plan carefully, verify your work with tools before answering, and consider edge cases.'; break;
+        default: thinkLine = 'Reasoning effort: MEDIUM — brief deliberation, then act.';
+      }
     }
     const allowOutside = !!(window.AppSettings && window.AppSettings.get('agentAllowOutsideWorkspace'));
     const outsideNote = allowOutside
-      ? '- Outside-workspace access is ENABLED: absolute paths are accepted, but prefer workspace-relative paths.'
-      : '- Access is limited to this workspace: absolute paths and "../" escapes are rejected.';
-    return `You are Cloud Code Agent, an expert software engineer working inside the user's IDE on the user's own machine.
+      ? 'Absolute paths outside the workspace are accepted (they still need approval to change).'
+      : 'Access is limited to this workspace: absolute paths and "../" escapes are rejected.';
+    const memoryBlock = this.memoryPromptBlock();
+    const prompt = `You are Cloud Code Agent, an expert software engineer working inside the user's IDE on the user's own machine.
 
 ## ENVIRONMENT
-- Workspace root: ${root}
-- Today's date: ${today}
-- Platform: Windows. run_command executes PowerShell in the workspace root.
+- Workspace root: ${root}  ·  Today's date: ${today}
+- Platform: Windows. run_command runs PowerShell in the workspace root.
 - ${outsideNote}
-- Every path you pass to a tool is RELATIVE to the workspace root, e.g. "src/main.js"; use "." for the root.
+- Paths are RELATIVE to the workspace root, e.g. "src/main.js"; use "." for the root.
 
 ## YOUR JOB
-Deliver the ENTIRE requested feature, end to end, in this single turn — working, runnable code saved to disk and verified with tools. You can only learn about this project through your tools; never assume what a file contains.
+Deliver the ENTIRE requested feature, end to end, in this single turn — working code saved to disk and verified with tools. You learn about this project only through your tools; never assume what a file contains.
 
-## TOOLS (use these exact names and argument names)
-1. list_tree  {"path":"."} — the folder structure at a glance; optional {"depth":4}, {"glob":"*.js"}, {"include_files":false}. Start here.
-2. find_files {"pattern":"user"} — find files by NAME anywhere; also {"glob":"*.test.js"}, {"path":"src"}, {"limit":200}.
-3. list_dir   {"path":"<dir>"} — one folder's entries ("." = workspace root).
-4. read_file  {"path":"<file>"} — whole file; add {"start_line":10,"end_line":60} for large files.
-5. search_code {"query":"<text>"} — search file contents; optional {"glob":"*.js"}, {"regex":true}, {"path":"src"}.
-6. edit_file  {"path":"<file>","old_string":"<exact text that exists>","new_string":"<replacement>","replace_all":false}
-7. write_file {"path":"<file>","content":"<the complete file content>"} — create or deliberately overwrite.
-8. delete_file {"path":"<file or empty folder>"} — deletes a file, or a folder ONLY when empty.
-9. move_file  {"path":"<from>","to":"<to>","overwrite":false} — rename/move; dest folders auto-created.
-10. run_command {"command":"<powershell command>"} — run in the workspace root.
+## TOOLS (exact names and argument names)
+1. list_tree {"path":"."} — folder structure; optional {"depth":4}, {"glob":"*.js"}, {"include_files":false}. Start here.
+2. find_files {"pattern":"user"} — find by NAME; optional {"glob":"*.test.js"}, {"path":"src"}, {"limit":200}.
+3. list_dir {"path":"<dir>"} — one folder's entries.
+4. read_file {"path":"<file>"} — one file whole; optional {"start_line":10,"end_line":60}.
+5. read_files {"path":"<dir>","glob":"*.js","limit":20,"max_chars":60000} — MANY files at once; use when asked to read everything in a folder.
+6. search_code {"query":"<text>"} — search contents; optional {"glob":"*.js"}, {"regex":true}, {"path":"src"}.
+7. edit_file {"path":"<file>","old_string":"<exact existing text>","new_string":"<replacement>","replace_all":false}
+8. write_file {"path":"<file>","content":"<the complete file content>"}
+9. delete_file {"path":"<file or empty folder>"} — one file, or a folder ONLY when empty.
+10. delete_files {"paths":["a.js","b.js"]} | {"path":"src/old"} | {"path":"logs","glob":"*.log"} — MANY at once, revertible.
+11. move_file {"path":"<from>","to":"<to>","overwrite":false} — one rename/move.
+12. move_files {"files":[{"from":"a","to":"b"}]} | {"path":"logs/*.log","to":"archive/"} — MANY at once, revertible.
+13. run_command {"command":"<powershell command>","timeout_ms":60000} — runs in the workspace root.
+14. read_env {"name":"PATH"} | {"all":true} — environment variables + system summary.
+15. remember {"text":"<durable fact>","tags":["prefs"]} / 16. recall {"query":"...","limit":5} — long-term memory.
 
-## FINDING YOUR WAY AROUND (do this before you claim anything is missing)
-- Never guess that a file does not exist. Search by NAME with find_files, then by CONTENT with search_code, then list_tree the area.
-- One list_tree call shows far more structure than a chain of list_dir calls — use it first in an unfamiliar project.
-- read_file tells you the exact next call when a file is too long to return whole; follow that instruction instead of guessing.
-- When the user names a feature ("auth", "payments"), find_files/search_code first, then read the real files before answering.
+## FINDING YOUR WAY AROUND
+- Never guess that a file does not exist: find_files by NAME, then search_code by CONTENT, then list_tree.
+- One list_tree call beats a chain of list_dir calls — use it first in an unfamiliar project.
+- read_file tells you the exact next call when a file is too long; follow that instruction instead of guessing.
+- For "read all files in X", call read_files once instead of many read_file calls.
 
 ## COMPLETENESS RULES (violating these is a failure)
-- Implement the WHOLE request in one turn. No placeholders, no "// ...rest of implementation", no TODO, no empty or stubbed function bodies, no "you can extend this further", no "apply the same change elsewhere".
+- Implement the WHOLE request in one turn. No placeholders, no "// ...rest", no TODO, no stubbed bodies.
 - If the request implies N files, change all N. Do not stop after the first one.
-- Read a SIBLING file of the same kind first and imitate it: import style, module system, naming, error handling, logging, formatting, comment density.
-- Handle the errors and edge cases the real code must survive (missing file, empty input, async failure) in the same style as the surrounding code.
-- Everything you write must run as-is. Never depend on code you did not write or did not verify.
-- Reuse the project's existing utilities; never add a dependency unless the user asked.
+- Read a SIBLING file of the same kind first and imitate it: import style, module system, naming, error handling, logging, formatting.
+- Everything you write must run as-is. Reuse existing utilities; never add a dependency unless asked.
 
 ## WORKFLOW
-1. ORIENT  — list_tree (or find_files for a named feature), then read_file the target and at least one sibling.
-2. PLAN    — decide the full set of changes before acting.
-3. ACT     — write_file / edit_file file by file, one tool call per turn.
-4. VERIFY  — read_file the result back, and run the project's build/test/lint via run_command when one exists (check package.json). Fix any failure, then re-verify.
-5. REPORT  — stop calling tools and summarise what changed and how it was verified.
+1. ORIENT — list_tree (or find_files), then read the target plus at least one sibling.
+2. PLAN — decide the full set of changes.
+3. ACT — write_file / edit_file, one tool call per turn.
+4. VERIFY — read the result back and run the project's build/test/lint via run_command (check package.json). Fix and re-verify.
+5. REPORT — stop calling tools and summarise.
 
 ## EDITING SAFELY
 - write_file must contain the FULL content; missing folders are created automatically. Never create files with run_command redirection.
-- old_string must match the file EXACTLY (whitespace + indentation) and be unique — include 2-3 surrounding lines when the text repeats, otherwise set replace_all.
-- delete_file refuses non-empty folders: delete the children first.
-- PowerShell: Get-ChildItem, Select-String, npm test, git status, git diff. Commands already start in the workspace root — never cd first.
+- old_string must match EXACTLY (whitespace + indentation) and be unique — include 2-3 surrounding lines, or set replace_all.
+- delete_file refuses non-empty folders; use delete_files for a whole tree.
+- PowerShell: Get-ChildItem, Select-String, npm test, git status, git diff. You already start in the workspace root — never cd first.
 - Never run destructive commands (del /s, Remove-Item -Recurse, git reset --hard, git clean) unless explicitly asked.
 
-## OUTPUT STYLE
-- Never draw ASCII art, box-drawing characters, progress bars, graphs, or decorative separator lines ("---", "===", "~~~", "────"). Use plain prose and markdown lists instead.
-- Wrap code in fenced code blocks ONLY when you are actually showing code.
-- Be concise: report what changed, where, and how it was verified.
+## OUTPUT STYLE (strict — the user hates decorative output)
+- NO ASCII art, NO bars, NO graphs, NO diagrams, NO box-drawing characters, NO sparklines, NO separator or "graph" lines of any kind ("---", "===", "~~~", "────", "+---+", "████ 60%", "▁▂▃▄▅", "●●●●").
+- Never emit mermaid / dot / graphviz / plantuml / vega diagram blocks — describe the structure in prose or a short markdown list instead.
+- Never echo, paste, quote or narrate the tool transcript: no tool names, no arguments, no JSON, no raw file dumps, no "[tool]" lines. Refer to work in prose ("I updated the parser in agent.js").
+- Wrap code in fenced blocks ONLY when you are actually showing code.
+- Be concise: what changed, where, and how it was verified.
 
 ## RULES
 - Every mutating action is approved by the user. A rejection is final: do not repeat it — adapt or ask.
 - Read tool results, including errors; never repeat a failing call unchanged.
 - Never claim something works unless a tool verified it.
 - Do not create README/notes/summary files unless asked.
-
+${memoryBlock}
 ${thinkLine}
 
 ## WHEN THE TASK IS DONE
 Reply with a short prose summary: which files changed and why, plus any commands you ran.
 
-If native function calling is unavailable in your responses, output ONLY this block, then wait for the result:
+If native function calling is unavailable, output ONLY this block, then wait for the result:
 <<<TOOL>>>
 {"name":"tool_name","args":{"path":"src/main.js"}}
 <<<END>>>
 
 Respond in the user's language, but keep code, paths and identifiers exactly as written.`;
+    return prompt;
+  }
+
+  /**
+   * Long-term memory block provided by another module (window.agentMemory).
+   * Returns '' when the module is absent or has nothing worth injecting, so the
+   * prompt is never padded with an empty heading.
+   */
+  memoryPromptBlock() {
+    try {
+      const mem = window.agentMemory;
+      if (!mem || typeof mem.getPromptBlock !== 'function') return '';
+      const block = String(mem.getPromptBlock() || '').trim();
+      return block ? '\n' + block + '\n' : '';
+    } catch (e) {
+      return '';
+    }
   }
 
   formatAssistantTurn(res, content, toolCalls) {
@@ -565,6 +762,10 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
   async loop() {
     const maxSteps = window.AppSettings ? (+window.AppSettings.get('maxSteps') || 15) : 15;
     this._maxSteps = maxSteps;
+    // "Think: Off" is a hard switch: deterministic output, zero narration.
+    const thinkLevel = window.AppSettings ? window.AppSettings.get('thinkLevel') : 'medium';
+    this.thinkOff = thinkLevel === 'off';
+    const temperature = this.thinkOff ? 0 : 0.2;
     const model = document.getElementById('model-select')
       ? document.getElementById('model-select').value : undefined;
     let finalSummary = '';
@@ -579,7 +780,7 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       this.setStatus(`Thinking… (step ${this.step}/${maxSteps})`);
       this.emitThinking('planning', `Planning next step (${this.step}/${maxSteps})`, this.step);
 
-      const thinking = this.pushThinking();
+      const thinking = this.thinkOff ? null : this.pushThinking();
       let res = null;
       try {
         res = await window.electronAPI.aiChatOnce({
@@ -587,7 +788,7 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
           model,
           messages: this.messages,
           tools: this.useNativeTools ? AGENT_TOOLS : undefined,
-          temperature: 0.2,
+          temperature,
           maxTokens: this.maxTokens()
         });
       } catch (err) {
@@ -607,6 +808,10 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
         this.useNativeTools = false;
         this.pushNotice('ℹ The model endpoint does not support native tool calling — switched to the built-in text tool protocol.');
       }
+      // The main process may return a separate `reasoning` field. It is a
+      // private thinking channel: it is never sent to the UI and never enters
+      // the transcript.
+      if (res.reasoning) delete res.reasoning;
 
       let content = (res.content || '').trim();
       const toolCalls = res.toolCalls || [];
@@ -616,6 +821,8 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       if (toolCalls.length && res.usedNativeTools && content.includes('<<<TOOL>>>')) {
         content = content.replace(/<<<TOOL>>>[\s\S]*?<<<END>>>/g, '').trim();
       }
+      // With thinking off the model still narrates inside `content` — drop it.
+      if (this.thinkOff && content) content = stripLeadingThinking(content);
 
       if (toolCalls.length === 0) {
         const clean = stripAsciiDecoration(content);
@@ -659,6 +866,7 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
    */
   emitThinking(phase, text, step) {
     try {
+      if (this.thinkOff) return; // "Think: Off" emits no thinking events at all
       if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
       const clean = condenseText(text, 140);
       const evt = typeof CustomEvent === 'function'
@@ -690,7 +898,7 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       if (plan.kind === 'read') {
         card.setState('running');
         const out = await plan.run();
-        card.setState('done', out);
+        card.setState('done', out, true); // raw tool output — never filtered
         this.emitThinking('tool', `${title} finished`, this.step);
         return this.trunc(out, 6000);
       }
@@ -734,11 +942,11 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
         const r = await window.electronAPI.runCommand({
           command: plan.command,
           cwd: window.explorer.rootPath,
-          timeoutMs: 60000
+          timeoutMs: plan.timeoutMs
         });
         const out = this.formatCommandOutput(plan.command, r);
-        card.setState(r && r.code === 0 ? 'done' : 'error', out);
-        return this.trunc(out, 6000);
+        card.setState(r && r.code === 0 ? 'done' : 'error', out, true);
+        return this.trunc(out, 8000);
       }
 
       card.setState('error', 'Internal: unknown plan kind');
@@ -1043,11 +1251,460 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       case 'run_command': {
         const command = String(args.command || '').trim();
         if (!command) throw new Error('command must not be empty.');
-        return { kind: 'command', command };
+        const requested = parseInt(args.timeout_ms, 10);
+        const timeoutMs = isFinite(requested) && requested > 0
+          ? Math.min(600000, Math.max(1000, requested))
+          : 60000; // default stays 60 s
+        return { kind: 'command', command, timeoutMs };
+      }
+      case 'read_files': {
+        return this.prepareReadFiles(args);
+      }
+      case 'delete_files': {
+        return await this.prepareDeleteFiles(args);
+      }
+      case 'move_files': {
+        return await this.prepareMoveFiles(args);
+      }
+      case 'read_env': {
+        return { kind: 'read', run: async () => this.collectEnv(args) };
+      }
+      case 'remember': {
+        const text = String(args.text || args.fact || args.content || args.memory || '').trim();
+        if (!text) throw new Error('remember requires "text" (the fact to store).');
+        return {
+          kind: 'read',
+          run: async () => {
+            const mem = window.agentMemory;
+            if (!mem || typeof mem.remember !== 'function') {
+              return 'Long-term memory is not available in this session (window.agentMemory is not loaded), so nothing was stored. Continue the task normally — do not retry this call.';
+            }
+            const opts = {};
+            if (Array.isArray(args.tags) && args.tags.length) opts.tags = args.tags.map(String);
+            if (args.key) opts.key = String(args.key);
+            const r = await mem.remember(text, opts);
+            return `Stored in long-term memory: ${condenseText(text, 200)}${r === false ? ' (the store rejected it — nothing persisted)' : ''}.`;
+          }
+        };
+      }
+      case 'recall': {
+        const query = String(args.query || args.text || args.q || '').trim();
+        if (!query) throw new Error('recall requires "query".');
+        const limit = Math.min(20, Math.max(1, parseInt(args.limit, 10) || 5));
+        return {
+          kind: 'read',
+          run: async () => {
+            const mem = window.agentMemory;
+            if (!mem || typeof mem.recall !== 'function') {
+              return 'Long-term memory is not available in this session (window.agentMemory is not loaded), so there is nothing to recall. Continue the task normally — do not retry this call.';
+            }
+            const hits = await mem.recall(query, limit);
+            if (!hits || !hits.length) return `No memories matched "${query}".`;
+            return `Memories matching "${query}":\n` + hits.map((h) => '- ' + condenseText(typeof h === 'string' ? h : (h.text || JSON.stringify(h)), 240)).join('\n');
+          }
+        };
       }
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
+  }
+
+  // --- Bulk read ------------------------------------------------------------
+  /** read_files: many files, one call, one character budget. */
+  prepareReadFiles(args) {
+    const target = String(args.path || args.dir || args.folder || '.').trim() || '.';
+    const abs = this.resolvePath(target);
+    const globStr = String(args.glob || args.filter || '').trim();
+    const globRe = globStr ? this.globToRegExp(globStr) : null;
+    const limit = Math.min(200, Math.max(1, parseInt(args.limit, 10) || 20));
+    const budget = Math.min(200000, Math.max(500, parseInt(args.max_chars, 10) || 60000));
+
+    return {
+      kind: 'read',
+      run: async () => {
+        // A single file: no walk needed.
+        const asFile = await window.electronAPI.readFile(abs).catch(() => null);
+        let candidates;
+        if (asFile !== null) {
+          candidates = [{ relPath: target, absPath: abs }];
+        } else {
+          const all = (await window.electronAPI.listFilesRecursive(abs, 20000)) || [];
+          candidates = all
+            .filter((f) => !String(f.relPath || '').split('/').some((seg) => NOISE_DIRS.has(seg)))
+            .filter((f) => !globRe || globRe.test(f.relPath) || globRe.test(f.name))
+            .map((f) => ({ relPath: f.relPath, absPath: abs + '/' + f.relPath }));
+        }
+        if (!candidates.length) {
+          return `No text files found under ${target}${globStr ? ` matching "${globStr}"` : ''}. It may be empty or contain only ignored folders (node_modules, dist, .git).`;
+        }
+
+        const chosen = candidates.slice(0, limit);
+        const skippedByLimit = candidates.length - chosen.length;
+        const parts = [];
+        const notes = [];
+        let used = 0;
+        let read = 0;
+        let skippedByBudget = 0;
+        let unreadable = 0;
+
+        for (const c of chosen) {
+          const body = await window.electronAPI.readFile(c.absPath).catch(() => null);
+          if (body === null) { unreadable++; continue; }
+          read++;
+          const header = `\n=== ${c.relPath} ===\n`;
+          const room = budget - used - header.length;
+          if (room <= 200) { skippedByBudget = chosen.length - read + 1; break; }
+          const clipped = body.length > room;
+          const text = clipped ? body.slice(0, room) : body;
+          parts.push(header + text + (clipped ? '\n[truncated — budget exhausted]' : ''));
+          used += header.length + text.length + 1;
+        }
+
+        if (skippedByLimit) notes.push(`${skippedByLimit} more file(s) matched but were not read (limit ${limit}) — raise "limit" or narrow "glob"`);
+        if (skippedByBudget) notes.push(`${skippedByBudget} file(s) were not read because the ${budget}-char budget was exhausted — continue with read_file or read_files with a smaller "path"`);
+        if (unreadable) notes.push(`${unreadable} file(s) could not be read as text`);
+
+        const head = `[read_files: ${read} file(s) from ${target}${globStr ? ` matching "${globStr}"` : ''}, ${used} of ${budget} chars]`;
+        const tail = notes.length ? '\n[skipped: ' + notes.join('; ') + ']' : '';
+        return head + parts.join('\n') + tail;
+      }
+    };
+  }
+
+  // --- Bulk delete ----------------------------------------------------------
+  /** delete_files: expand targets, refuse the root, keep every original. */
+  async prepareDeleteFiles(args) {
+    const rawTargets = [];
+    const globStr = String(args.glob || args.pattern || args.filter || '').trim();
+    // With a glob, `path` is the SEARCH BASE, not a delete target.
+    const paths = args.paths !== undefined ? args.paths
+      : (args.files !== undefined && typeof args.files === 'string') ? args.files
+        : (globStr ? undefined : args.path);
+    if (Array.isArray(paths)) {
+      for (const p of paths) if (String(p || '').trim()) rawTargets.push(String(p).trim());
+    } else if (typeof paths === 'string' && paths.trim()) {
+      rawTargets.push(paths.trim());
+    }
+
+    if (globStr) {
+      const base = this.resolvePath(String(args.path || args.dir || '.').trim() || '.');
+      const re = this.globToRegExp(globStr);
+      const all = (await window.electronAPI.listFilesRecursive(base, 20000)) || [];
+      const hits = all.filter((f) => re.test(f.relPath) || re.test(f.name));
+      if (!hits.length) throw new Error(`delete_files: no files matched "${globStr}" under ${base} — nothing to delete.`);
+      const baseRel = String(args.path || '.').replace(/\\/g, '/').replace(/\/+$/, '');
+      const baseKey = this.resolvePath(String(args.path || '.').trim() || '.').toLowerCase();
+      for (const f of hits) {
+        const rel = baseRel && baseRel !== '.' ? baseRel + '/' + f.relPath : f.relPath;
+        // A glob selects FILES; never remove the folder that merely contains them.
+        if (this.resolvePath(rel).toLowerCase() === baseKey) continue;
+        rawTargets.push(rel);
+      }
+    }
+
+    if (!rawTargets.length) {
+      throw new Error('delete_files requires "paths" (an array), a "path", or "path" + "glob".');
+    }
+
+    const rootRaw = String(window.explorer ? window.explorer.rootPath : '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const rootLower = rootRaw.toLowerCase();
+
+    const items = [];
+    const seen = new Set();
+    for (const rel of rawTargets) {
+      let abs;
+      try { abs = this.resolvePath(rel); } catch (e) { throw new Error(`delete_files: ${rel} — ${e.message}`); }
+      const key = abs.toLowerCase();
+      if (seen.has(key)) continue;
+      if (key === rootLower || key === rootLower.replace(/\/$/, '')) {
+        throw new Error(
+          `Refusing to delete the workspace root (${rel}). ` +
+          'delete_files can never remove the folder the project lives in — ask the user to close it manually.'
+        );
+      }
+
+      const content = await window.electronAPI.readFile(abs).catch(() => null);
+      if (content !== null) {
+        seen.add(key);
+        items.push({ path: abs, relPath: rel, isDir: false, original: content });
+        continue;
+      }
+
+      const entries = await window.electronAPI.readDirectory(abs).catch(() => null);
+      if (entries === null) {
+        throw new Error(`delete_files: "${rel}" does not exist — nothing to delete.`);
+      }
+      if (!entries.length) {
+        seen.add(key);
+        items.push({ path: abs, relPath: rel, isDir: true, original: null });
+        continue;
+      }
+      // Non-empty folder → expand the whole tree, deepest entries first.
+      // expandTree returns the folder itself last and `key` is deliberately NOT
+      // recorded yet, so its own entry survives the dedupe below.
+      const tree = await this.expandTree(abs, rel);
+      if (!tree.length) throw new Error(`delete_files: "${rel}" is empty but could not be expanded.`);
+      for (const t of tree) {
+        const tKey = t.path.toLowerCase();
+        if (seen.has(tKey)) continue;
+        seen.add(tKey);
+        items.push(t);
+      }
+    }
+
+    if (!items.length) throw new Error('delete_files: every requested path was already gone — nothing to do.');
+    const fileCount = items.filter((i) => !i.isDir).length;
+    const dirCount = items.length - fileCount;
+    const shown = items.slice(0, 10).map((i) => i.relPath + (i.isDir ? '/' : ''));
+    const more = items.length > 10 ? `, +${items.length - 10} more` : '';
+    const label = dirCount
+      ? `${items.length} item(s): ${fileCount} file(s), ${dirCount} folder(s)`
+      : `${items.length} file(s)`;
+
+    return {
+      kind: 'delete',
+      items,
+      summary: `DELETE ${label} — ${shown.join(', ')}${more}. All of them can be restored with Revert.`,
+      detail: items.map((i) => i.relPath + (i.isDir ? '/' : '')).join('\n')
+    };
+  }
+
+  /** Recursively list a folder: files with content, then empty/deeper folders. */
+  async expandTree(dirAbs, dirRel, out) {
+    out = out || [];
+    const entries = await window.electronAPI.readDirectory(dirAbs).catch(() => null);
+    if (entries === null) return out;
+    const dirs = [];
+    for (const e of entries) {
+      if (NOISE_DIRS.has(e.name)) continue; // never nuke vendored noise by accident
+      const childAbs = dirAbs + '/' + e.name;
+      const childRel = dirRel + '/' + e.name;
+      if (e.isDirectory) dirs.push([childAbs, childRel]);
+      else {
+        const content = await window.electronAPI.readFile(childAbs).catch(() => null);
+        out.push({ path: childAbs, relPath: childRel, isDir: false, original: content === null ? '' : content });
+      }
+    }
+    // deepest first so folders are empty by the time we remove them
+    for (const [a, r] of dirs) await this.expandTree(a, r, out);
+    out.push({ path: dirAbs, relPath: dirRel, isDir: true, original: null });
+    return out;
+  }
+
+  // --- Bulk move ------------------------------------------------------------
+  /** move_files: explicit pairs, a single pair, or a glob into a folder. */
+  async prepareMoveFiles(args) {
+    const overwrite = !!args.overwrite;
+    const pairs = [];
+
+    const files = Array.isArray(args.files) ? args.files : null;
+    if (files) {
+      for (const f of files) {
+        if (!f || typeof f !== 'object') continue;
+        const from = String(f.from || f.path || f.source || '').trim();
+        const to = String(f.to || f.dest || f.destination || f.target || '').trim();
+        if (!from || !to) throw new Error('move_files: every entry in "files" needs both "from" and "to".');
+        pairs.push({ from, to });
+      }
+    }
+
+    const singleFrom = String(args.from || args.path || '').trim();
+    const singleTo = String(args.to || args.dest || args.destination || '').trim();
+    if (!files || !files.length) {
+      if (!singleFrom || !singleTo) {
+        throw new Error('move_files requires "files":[{"from","to"}], or "from" + "to", or "path" (glob) + "to".');
+      }
+      // glob sources?
+      if (singleFrom.match(/[*?]/)) {
+        const lastSlash = Math.max(singleFrom.lastIndexOf('/'), singleFrom.lastIndexOf('\\'));
+        const dirPart = lastSlash > 0 ? singleFrom.slice(0, lastSlash) : '.';
+        const globStr = lastSlash > 0 ? singleFrom.slice(lastSlash + 1) : singleFrom;
+        const re = this.globToRegExp(globStr);
+        const base = this.resolvePath(dirPart);
+        const all = (await window.electronAPI.listFilesRecursive(base, 20000)) || [];
+        const hits = all.filter((f) => re.test(f.relPath) || re.test(f.name));
+        if (!hits.length) throw new Error(`move_files: no files matched "${singleFrom}" under ${base}.`);
+        for (const f of hits) {
+          const from = (dirPart && dirPart !== '.' ? dirPart + '/' : '') + f.relPath;
+          pairs.push({ from, to: singleTo });
+        }
+      } else {
+        pairs.push({ from: singleFrom, to: singleTo });
+      }
+    }
+
+    const items = [];
+    const seen = new Set();
+    for (const p of pairs) {
+      const fromAbs = this.resolvePath(p.from);
+      let toRel = p.to;
+      let toAbs = this.resolvePath(toRel);
+
+      // A folder destination (trailing "/" or an existing directory) keeps the name.
+      const destIsDir = /[\\/]$/.test(toRel) ||
+        (await window.electronAPI.readFile(toAbs).catch(() => null) === null &&
+          (await window.electronAPI.readDirectory(toAbs).catch(() => null) !== null));
+      if (destIsDir) {
+        const base = p.from.split(/[\\/]/).filter(Boolean).pop() || '';
+        toRel = toRel.replace(/[\\/]+$/, '') + '/' + base;
+        toAbs = this.resolvePath(toRel);
+      }
+
+      if (fromAbs.toLowerCase() === toAbs.toLowerCase()) {
+        throw new Error(`move_files: source and destination are the same path (${p.from}) — nothing to do.`);
+      }
+      const key = fromAbs.toLowerCase() + '->' + toAbs.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const srcIsFile = (await window.electronAPI.readFile(fromAbs).catch(() => null)) !== null;
+      const srcIsDir = !srcIsFile &&
+        (await window.electronAPI.readDirectory(fromAbs).catch(() => null)) !== null;
+      if (!srcIsFile && !srcIsDir) {
+        throw new Error(`move_files: "${p.from}" does not exist.`);
+      }
+      const destExists = (await window.electronAPI.readFile(toAbs).catch(() => null) !== null) ||
+        (await window.electronAPI.readDirectory(toAbs).catch(() => null) !== null);
+      if (destExists && !overwrite) {
+        throw new Error(
+          `move_files: "${toRel}" already exists. Pick another destination, or set overwrite=true to replace it.`
+        );
+      }
+      items.push({
+        path: fromAbs, to: toAbs, fromRel: p.from, toRel,
+        isDir: srcIsDir, overwrite
+      });
+    }
+
+    if (!items.length) throw new Error('move_files: nothing to move.');
+    const shown = items.slice(0, 10).map((i) => `${i.fromRel} → ${i.toRel}`);
+    const more = items.length > 10 ? `, +${items.length - 10} more` : '';
+    return {
+      kind: 'move',
+      items,
+      summary: `MOVE ${items.length} item(s) — ${shown.join(', ')}${more}. Reversible with Revert.`,
+      detail: shown.join('\n')
+    };
+  }
+
+  // --- Environment ----------------------------------------------------------
+  /**
+   * read_env: renderer processes have no environment object, and no new IPC may
+   * added, so this is built from the existing bridge — the workspace .env
+   * files, package.json and the navigator/platform surface. The summary says
+   * plainly which facts are unavailable rather than inventing them.
+   */
+  async collectEnv(args) {
+    const root = window.explorer ? window.explorer.rootPath : null;
+    const vars = new Map();
+    const sources = [];
+
+    // Preferred path: the real OS environment + machine facts from the main
+    // process (secrets are masked there before they ever reach the model).
+    let sys = null;
+    if (window.electronAPI && window.electronAPI.sysInfo) {
+      try {
+        const info = await window.electronAPI.sysInfo();
+        if (info && info.ok) {
+          sys = info;
+          sources.push('process environment');
+          const env = info.env || {};
+          for (const k of Object.keys(env).sort()) {
+            vars.set(k, { value: String(env[k]), from: 'process.env' });
+          }
+        }
+      } catch (e) {
+        sys = null;
+      }
+    }
+
+    const ENV_FILES = ['.env', '.env.local', '.env.development', '.env.production', 'env.txt'];
+    for (const name of ENV_FILES) {
+      let abs;
+      try { abs = this.resolvePath(name); } catch (e) { continue; }
+      const raw = await window.electronAPI.readFile(abs).catch(() => null);
+      if (raw === null) continue;
+      sources.push(name);
+      for (const line of raw.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t || t.startsWith('#')) continue;
+        const m = t.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+        if (!m) continue;
+        let v = m[2].trim();
+        if (/^(['"]).*\1$/.test(v)) v = v.slice(1, -1);
+        if (!vars.has(m[1])) vars.set(m[1], { value: v, from: name });
+      }
+    }
+
+    // User-level info reachable without new IPC.
+    if (root) {
+      const pkgRaw = await window.electronAPI.readFile(this.resolvePath('package.json')).catch(() => null);
+      if (pkgRaw !== null) {
+        try {
+          const pkg = JSON.parse(pkgRaw);
+          sources.push('package.json');
+          const eng = pkg.engines || {};
+          const meta = [
+            ['PROJECT_NAME', pkg.name || '(unnamed)'],
+            ['PROJECT_VERSION', pkg.version || '(none)'],
+            ['NODE_REQUIRED', eng.node || '(unspecified)']
+          ];
+          for (const [k, v] of meta) if (!vars.has(k)) vars.set(k, { value: String(v), from: 'package.json' });
+        } catch (e) { /* malformed package.json is not fatal */ }
+      }
+    }
+
+    const s = sys && sys.system ? sys.system : null;
+    const summary = [
+      'System summary:',
+      '- platform: ' + ((s && (s.platform + ' ' + s.arch)) || (typeof navigator !== 'undefined' && navigator.platform ? navigator.platform : 'unknown')) +
+      (s && s.release ? ' (' + s.release + ')' : '') +
+      (s && s.cpus ? ' · ' + s.cpus + ' logical cores' : ''),
+      '- workspace cwd: ' + (root || 'no folder open') +
+      (s && s.cwd ? ' · process cwd: ' + s.cwd : ''),
+      '- memory: ' + (s ? Math.round(s.freeMemMB / 1024) + ' GB free of ' + Math.round(s.totalMemMB / 1024) + ' GB' : 'not readable from the renderer') +
+      (s && s.homedir ? ' · home: ' + s.homedir : ''),
+      '- versions: node ' + ((s && s.node) || '?') +
+      (s && s.electron ? ' · electron ' + s.electron : '') +
+      (s && s.chrome ? ' · chromium ' + s.chrome : '') +
+      (s && s.appVersion ? ' · app ' + s.appVersion : ''),
+      '- electron version: not readable from the renderer; read it from package.json devDependencies',
+      '- free memory: not readable from the renderer; run run_command {"command":"Get-CimInstance Win32_OperatingSystem"}'
+    ].join('\n');
+
+    const wanted = String(args.name || '').trim();
+    const filter = String(args.filter || '').trim();
+    const CAP = 200;
+
+    if (wanted) {
+      const key = wanted.toUpperCase();
+      const hit = Array.from(vars.entries()).find(([k]) => k.toUpperCase() === key);
+      const lines = [`${key} = ${hit ? hit[1].value : '(not found)'}`, `(source: ${hit ? hit[1].from : 'unavailable'})`];
+      if (vars.has(key) || /^(PATH|OS|NOTEPAD|TEMP|TMP|USERPROFILE|HOME|SHELL|PROCESSOR_ARCHITECTURE|COMPUTERNAME|USERNAME|APPDATA|LOCALAPPDATA|EDITOR|TERM)$/.test(key)) {
+        lines.push(sys
+          ? 'Source: the real process environment (secret-looking values are masked).'
+          : 'Note: the true OS environment lives in the main process and no env IPC is available here.');
+      }
+      return summary + '\n\n' + lines.join('\n');
+    }
+
+    let entries = Array.from(vars.entries());
+    if (filter) {
+      const f = filter.toLowerCase();
+      entries = entries.filter(([k]) => k.toLowerCase().includes(f));
+    }
+    if (!entries.length) {
+      return summary + '\n\nNo variables matched' + (filter ? ` "${filter}"` : '') +
+        '.\nSources inspected: ' + (sources.length ? sources.join(', ') : 'none found') +
+        '.\nThe renderer cannot read the real OS environment; use run_command ("Get-ChildItem Env:") when you need it.';
+    }
+    const shown = entries.slice(0, CAP);
+    const lines = shown.map(([k, v]) => `${k} = ${v.value}   (${v.from})`);
+    const more = entries.length > CAP ? `\n[${entries.length - CAP} more variables — narrow with "filter" or "name"]` : '';
+    return summary + '\n\n' +
+      `${shown.length} of ${entries.length} variable(s) from: ${sources.join(', ') || 'workspace'}:\n` +
+      lines.join('\n') + more +
+      '\nNote: the renderer cannot read the real OS environment; use run_command ("Get-ChildItem Env:") for that.';
   }
 
   // --- Approval gate -------------------------------------------------------
@@ -1061,6 +1718,7 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
 
     return new Promise((resolve) => {
       let settled = false;
+      let timer = null;
       const finish = (ok, allowAll) => {
         if (settled) return;
         settled = true;
@@ -1073,6 +1731,9 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       // Auto-open the diff proposal for file edits (VS Code / Cursor style)
       if (plan.kind === 'edit') {
         card.openDiff(plan, (ok) => finish(ok, false));
+      } else if (plan.detail || plan.summary) {
+        // Bulk plans (delete_files / move_files) list exactly what will change.
+        card.setState('awaiting', plan.detail || plan.summary);
       }
 
       const approvedLabel = plan.kind === 'command' ? '▶ Run' : '✓ Approve';
@@ -1082,7 +1743,8 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
         { label: 'Allow all in this session', cls: 'allow', onClick: () => finish(true, true) }
       ]);
 
-      const timer = setTimeout(() => finish(false, false), 5 * 60 * 1000); // 5 min
+      const timer2 = setTimeout(() => finish(false, false), 5 * 60 * 1000); // 5 min
+      timer = timer2;
     });
   }
 
@@ -1117,57 +1779,96 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
 
   // --- Apply an approved delete --------------------------------------------
   async applyDelete(plan) {
-    if (!plan.isDir) {
-      const original = plan.original !== undefined && plan.original !== null
-        ? plan.original
-        : (await window.electronAPI.readFile(plan.path).catch(() => ''));
-      const r = await window.electronAPI.deletePath(plan.path);
-      if (r && r.error) throw new Error(`delete_file failed: ${r.error}`);
-      // tracked with updated === null so "revert" restores the file
-      this.trackChange(plan.path, original, null);
-    } else {
-      const r = await window.electronAPI.deletePath(plan.path);
-      if (r && r.error) throw new Error(`delete_file failed: ${r.error}`);
-      this.changes.delete(plan.path);
+    // Bulk (delete_files): items[]; single (delete_file): this path/original.
+    const items = Array.isArray(plan.items) && plan.items.length
+      ? plan.items
+      : [{ path: plan.path, relPath: plan.relPath, isDir: plan.isDir, original: plan.original }];
+
+    const deleted = [];
+    const failed = [];
+    // Deepest paths first so folders are empty when they are removed.
+    const ordered = items.slice().sort((a, b) => b.path.length - a.path.length);
+
+    for (const item of ordered) {
+      const original = item.original !== undefined && item.original !== null
+        ? item.original
+        : (await window.electronAPI.readFile(item.path).catch(() => ''));
+      const r = await window.electronAPI.deletePath(item.path).catch((e) => ({ error: e && e.message ? e.message : String(e) }));
+      if (r && r.error) {
+        failed.push(`${item.relPath} (${r.error})`);
+        continue;
+      }
+      deleted.push(item.relPath + (item.isDir ? '/' : ''));
+      this.closeTabFor(item.path);
+      if (item.isDir) {
+        this.changes.delete(item.path); // an empty folder has nothing to restore
+      } else {
+        // tracked with updated === null so "revert" restores the exact content
+        this.trackChange(item.path, original, null);
+      }
     }
-    this.closeTabFor(plan.path);
     this.refreshIndexes();
-    return plan.summary;
+
+    const head = deleted.slice(0, 10).join(', ') + (deleted.length > 10 ? `, +${deleted.length - 10} more` : '');
+    const tail = failed.length ? `\nFailed to delete ${failed.length} item(s): ${failed.join(', ')}` : '';
+    return `Deleted ${deleted.length} item(s): ${head}. Use Revert to restore them.${tail}`;
   }
 
   // --- Apply an approved move / rename --------------------------------------
   async applyMove(plan) {
-    const lastSlash = Math.max(plan.to.lastIndexOf('/'), plan.to.lastIndexOf('\\'));
-    if (lastSlash > 0) {
-      await window.electronAPI.createDirectory(plan.to.slice(0, lastSlash)).catch(() => {});
-    }
-    if (plan.overwrite) await window.electronAPI.deletePath(plan.to).catch(() => {});
+    const items = Array.isArray(plan.items) && plan.items.length ? plan.items : [plan];
+    const moved = [];
+    const failed = [];
 
-    let res = await window.electronAPI.renamePath(plan.path, plan.to).catch((e) => ({ error: e && e.message ? e.message : String(e) }));
-    if (!res || res.error) {
-      // Fallback for cross-volume moves the OS cannot rename directly.
-      if (!plan.isDir) {
-        const content = await window.electronAPI.readFile(plan.path);
-        await window.electronAPI.writeFile(plan.to, content);
-        await window.electronAPI.deletePath(plan.path).catch(() => {});
-        res = { ok: true };
-      } else {
-        throw new Error(`move_file failed: ${(res && res.error) || 'unknown error'}`);
+    for (const item of items) {
+      const lastSlash = Math.max(item.to.lastIndexOf('/'), item.to.lastIndexOf('\\'));
+      if (lastSlash > 0) {
+        await window.electronAPI.createDirectory(item.to.slice(0, lastSlash)).catch(() => {});
       }
+      // Snapshot the content BEFORE the move so revert can put it back.
+      let content = null;
+      if (!item.isDir) content = await window.electronAPI.readFile(item.path).catch(() => '');
+      // ...and the content an overwrite is about to destroy.
+      let overwritten = null;
+      if (item.overwrite && !item.isDir) {
+        overwritten = await window.electronAPI.readFile(item.to).catch(() => null);
+      }
+      if (item.overwrite) await window.electronAPI.deletePath(item.to).catch(() => {});
+
+      let res = await window.electronAPI.renamePath(item.path, item.to)
+        .catch((e) => ({ error: e && e.message ? e.message : String(e) }));
+      if (!res || res.error) {
+        // Fallback for cross-volume moves the OS cannot rename directly.
+        if (!item.isDir) {
+          const c = content === null ? await window.electronAPI.readFile(item.path) : content;
+          await window.electronAPI.writeFile(item.to, c);
+          await window.electronAPI.deletePath(item.path).catch(() => {});
+          res = { ok: true };
+        } else {
+          failed.push(`${item.fromRel} (${(res && res.error) || 'unknown error'})`);
+          continue;
+        }
+      }
+
+      const previous = this.changes.get(item.path);
+      if (previous) this.changes.delete(item.path);
+      if (!item.isDir) {
+        const payload = previous && previous.updated !== null ? previous.updated : (content === null ? '' : content);
+        // source tracked as "deleted" + destination as "added" → revert moves back
+        this.trackChange(item.path, payload, null);
+        this.trackChange(item.to, null, payload, overwritten);
+      } else {
+        this.renderChangesBadge();
+        this.renderChangesList();
+      }
+      moved.push(`${item.fromRel} → ${item.toRel}`);
+      this.closeTabFor(item.path);
     }
 
-    const previous = this.changes.get(plan.path);
-    if (previous) this.changes.delete(plan.path);
-    if (!plan.isDir) {
-      // tracked with original === null so "revert" removes the moved-in file
-      this.trackChange(plan.to, null, previous ? previous.updated : '');
-    } else {
-      this.renderChangesBadge();
-      this.renderChangesList();
-    }
-    this.closeTabFor(plan.path);
     this.refreshIndexes();
-    return plan.summary;
+    const head = moved.slice(0, 10).join(', ') + (moved.length > 10 ? `, +${moved.length - 10} more` : '');
+    const tail = failed.length ? `\nFailed to move ${failed.length} item(s): ${failed.join(', ')}` : '';
+    return `Moved ${moved.length} item(s): ${head}.${tail}`;
   }
 
   closeTabFor(path) {
@@ -1179,12 +1880,20 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
 
   /** Short one-line description of what a prepared tool call will do. */
   planTarget(plan, args) {
+    if (plan && Array.isArray(plan.items) && plan.items.length) {
+      const n = plan.items.length;
+      const first = plan.items[0];
+      const head = plan.kind === 'move' && first.toRel ? `${first.fromRel} -> ${first.toRel}` : first.relPath;
+      return n > 1 ? `${head} (+${n - 1} more)` : head;
+    }
     if (plan && plan.relPath) {
       return plan.kind === 'move' ? `${plan.fromRel} -> ${plan.toRel}` : plan.relPath;
     }
     if (plan && plan.path) return plan.path;
     if (plan && plan.command) return plan.command;
-    return (args && (args.path || args.query || args.command)) || '';
+    if (args && Array.isArray(args.paths)) return `${args.paths.length} paths`;
+    if (args && Array.isArray(args.files)) return `${args.files.length} files`;
+    return (args && (args.path || args.name || args.text || args.query || args.command)) || '';
   }
 
   humanSize(bytes) {
@@ -1194,8 +1903,12 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     return (n / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
-  trackChange(path, original, updated) {
-    this.changes.set(path, { path, original, updated, time: Date.now() });
+  /**
+   * @param {string|null} [overwritten] content that an overwrite move destroyed
+   *        at this path; revert puts it back after removing the moved-in file.
+   */
+  trackChange(path, original, updated, overwritten) {
+    this.changes.set(path, { path, original, updated, time: Date.now(), overwritten: overwritten || null });
     this.renderChangesBadge();
     this.renderChangesList();
   }
@@ -1211,7 +1924,14 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       await window.electronAPI.writeFile(path, change.original == null ? '' : change.original);
     } else if (change.original === null) {
       // was created by the agent (e.g. moved in) → remove it again
-      await window.electronAPI.deletePath(path);
+      await window.electronAPI.deletePath(path).catch(() => {});
+      // an overwrite move also destroyed whatever used to live here
+      if (change.overwritten != null) {
+        await window.electronAPI.createDirectory(
+          path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))) || '.'
+        ).catch(() => {});
+        await window.electronAPI.writeFile(path, change.overwritten);
+      }
     } else {
       await window.electronAPI.writeFile(path, change.original);
     }
@@ -1335,8 +2055,13 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     node.className = 'tool-card';
     node.dataset.state = 'pending';
 
-    const target = (args.path && args.to ? `${args.path} → ${args.to}` : null)
-      || args.path || args.command || args.query || '';
+    const target = (args.paths && Array.isArray(args.paths))
+      ? `${args.paths.length} paths`
+      : (args.files && Array.isArray(args.files))
+        ? `${args.files.length} files`
+        : (args.path && args.to ? `${args.path} → ${args.to}` : null)
+          || (Array.isArray(args.path) ? `${args.path.length} paths` : null)
+          || args.path || args.name || args.text || args.command || args.query || '';
     node.innerHTML = `
       <div class="tool-head">
         <span class="tool-ico">${TOOL_ICONS[name] || '🔧'}</span>
@@ -1357,7 +2082,14 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
 
     const card = {
       node,
-      setState(state, text) {
+      /**
+       * @param {string} state  badge/card state
+       * @param {string} [text] detail body
+       * @param {boolean} [raw] true when the text is verbatim tool output
+       *        (file contents, command stdout) which must NOT be filtered;
+       *        agent-authored summaries default to filtered.
+       */
+      setState(state, text, raw) {
         node.dataset.state = state;
         const labels = {
           pending: '…', running: 'working…', done: '✓ done',
@@ -1370,8 +2102,8 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
           detail.innerHTML = '';
           const pre = document.createElement('pre');
           pre.className = 'tool-output';
-          const s = String(text);
-          pre.textContent = s.length > 700 ? s.slice(0, 700) + '\n[…]' : s;
+          const s = raw ? String(text) : stripAsciiDecoration(text);
+          pre.textContent = s.length > 900 ? s.slice(0, 900) + '\n[…]' : s;
           detail.appendChild(pre);
           if (window.ai) window.ai.scrollToBottom();
         }
@@ -1452,6 +2184,9 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     const ai = window.ai;
     const container = document.getElementById('chat-messages');
     if (!container) return null;
+    // every agent-authored string goes through the same decorative filter
+    let clean = stripAsciiDecoration(markdown);
+    if (this.thinkOff) clean = stripLeadingThinking(clean);
     const el = document.createElement('div');
     el.className = 'chat-msg assistant';
     el.innerHTML = `
@@ -1460,10 +2195,10 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     `;
     const body = el.querySelector('.msg-body');
     if (ai) {
-      body.innerHTML = ai.renderMarkdown(markdown);
+      body.innerHTML = ai.renderMarkdown(clean);
       ai.wireCodeButtons(body);
     } else {
-      body.textContent = markdown;
+      body.textContent = clean;
     }
     container.appendChild(el);
     if (ai) ai.scrollToBottom();
@@ -1513,6 +2248,19 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
   resolvePath(p) {
     const rootRaw = window.explorer ? window.explorer.rootPath : null;
     if (!rootRaw) throw new Error('No workspace folder is open.');
+    // The engine owns the path sandbox; keep the local copy as a fallback.
+    const eng = (window.CloudAI && window.CloudAI.tools) || null;
+    if (eng && typeof eng.resolvePath === 'function') {
+      try {
+        return eng.resolvePath(p, {
+          root: String(rootRaw).replace(/\\/g, '/').replace(/\/+$/, ''),
+          allowOutside: !!(window.AppSettings && window.AppSettings.get('agentAllowOutsideWorkspace'))
+        });
+      } catch (e) {
+        if (e && /outside the workspace/i.test(e.message || '')) throw e;
+        /* fall through to the local implementation */
+      }
+    }
     const root = String(rootRaw).replace(/\\/g, '/').replace(/\/+$/, '');
     let norm = String(p == null ? '' : p).trim().replace(/\\/g, '/');
     if (!norm) throw new Error('Empty path.');
@@ -1555,6 +2303,15 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
    * is never lost over a cosmetic mismatch.
    */
   normalizeArgs(name, args) {
+    // The engine owns argument normalisation; keep the local copy as a fallback.
+    const eng = (window.CloudAI && window.CloudAI.tools) || null;
+    if (eng && typeof eng.normalizeArgs === 'function') {
+      try {
+        return eng.normalizeArgs(name, args);
+      } catch (e) {
+        /* fall through to the local implementation */
+      }
+    }
     const a = (args && typeof args === 'object' && !Array.isArray(args))
       ? Object.assign({}, args)
       : {};
@@ -1642,21 +2399,94 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       }
     }
 
+    if (name === 'delete_files') {
+      // plural: paths / files / items, plus a single "path" and an optional glob
+      let list = pick('paths', 'files', 'items', 'targets', 'file_list', 'fileList');
+      if (typeof list === 'string') list = list.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+      if (list !== undefined) a.paths = list;
+      if (a.path === undefined) {
+        const p = pick('target', 'file', 'filename', 'dir', 'directory', 'folder');
+        if (p !== undefined) a.path = p;
+      }
+      const glob = pick('glob', 'pattern', 'filter', 'extension', 'ext', 'mask');
+      if (glob !== undefined && a.glob === undefined) a.glob = glob;
+    }
+
+    if (name === 'move_files') {
+      let list = pick('files', 'items', 'pairs', 'moves', 'renames');
+      if (typeof list === 'string') {
+        list = list.split(/[;\n]/).map((s) => s.trim()).filter(Boolean)
+          .map((s) => {
+            const m = s.split(/\s*(?:->|=>|:)\s*/);
+            return m.length >= 2 ? { from: m[0], to: m[1] } : { from: s };
+          });
+      }
+      if (list !== undefined) a.files = list;
+      const from = pick('from', 'source', 'src', 'old_path', 'oldPath');
+      if (from !== undefined && a.from === undefined) a.from = from;
+      const to = pick('to', 'dest', 'destination', 'destination_path', 'dst', 'new_path', 'newPath');
+      if (to !== undefined && a.to === undefined) a.to = to;
+      // "path" may be the glob/source; a bare "target" was folded into path above.
+      if (a.path === undefined) {
+        const p = pick('pattern', 'glob', 'filter');
+        if (p !== undefined) a.path = p;
+      }
+      const ow = pick('overwrite', 'force', 'replace', 'overwriteExisting');
+      if (ow !== undefined && a.overwrite === undefined) a.overwrite = ow;
+    }
+
+    if (name === 'read_files') {
+      const glob = pick('glob', 'filter', 'extension', 'ext', 'pattern');
+      if (glob !== undefined && a.glob === undefined) a.glob = glob;
+      const lim = pick('limit', 'max', 'count', 'max_files', 'maxFiles');
+      if (lim !== undefined && a.limit === undefined) a.limit = lim;
+      const mc = pick('max_chars', 'maxChars', 'max_characters', 'char_budget', 'chars', 'budget');
+      if (mc !== undefined && a.max_chars === undefined) a.max_chars = mc;
+    }
+
+    if (name === 'read_env') {
+      const n = pick('name', 'key', 'variable', 'var');
+      if (n !== undefined && a.name === undefined) a.name = n;
+      const f = pick('filter', 'prefix', 'contains', 'pattern');
+      if (f !== undefined && a.filter === undefined) a.filter = f;
+      if (a.all === undefined && (a.dump !== undefined || a.everything !== undefined)) a.all = true;
+    }
+
+    if (name === 'remember') {
+      const t = pick('text', 'fact', 'memory', 'note', 'content', 'value');
+      if (t !== undefined && a.text === undefined) a.text = t;
+      if (typeof a.tags === 'string') a.tags = a.tags.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+    }
+
+    if (name === 'recall') {
+      const q = pick('query', 'q', 'text', 'search', 'term', 'about');
+      if (q !== undefined && a.query === undefined) a.query = q;
+      const lim = pick('limit', 'max', 'count', 'top');
+      if (lim !== undefined && a.limit === undefined) a.limit = lim;
+    }
+
+    if (name === 'run_command') {
+      const t = pick('timeout_ms', 'timeoutMs', 'timeout', 'timeout_ms_max');
+      if (t !== undefined && a.timeout_ms === undefined) a.timeout_ms = t;
+    }
+
     const command = pick('command', 'cmd', 'shell_command', 'shellCommand', 'script', 'run');
     if (command !== undefined && a.command === undefined) a.command = command;
 
     // stringly-typed booleans
     for (const k of ['replace_all', 'replaceAll', 'regex', 'case_sensitive', 'caseSensitive',
-      'overwrite', 'include_files', 'includeFiles', 'files', 'with_files']) {
+      'overwrite', 'include_files', 'includeFiles', 'files', 'with_files', 'all', 'everything', 'dump']) {
       if (typeof a[k] === 'string') a[k] = /^(true|yes|1)$/i.test(a[k].trim());
     }
     if (a.replace_all === undefined && a.replaceAll !== undefined) a.replace_all = a.replaceAll;
 
     // stringly-typed numbers
     for (const k of ['start_line', 'startLine', 'end_line', 'endLine', 'depth', 'limit',
-      'max_depth', 'maxDepth']) {
+      'max_depth', 'maxDepth', 'max_chars', 'maxChars', 'timeout_ms', 'timeoutMs', 'timeout']) {
       if (typeof a[k] === 'string' && /^\d+$/.test(a[k].trim())) a[k] = parseInt(a[k], 10);
     }
+    if (a.max_chars === undefined && a.maxChars !== undefined) a.max_chars = a.maxChars;
+    if (a.timeout_ms === undefined && a.timeoutMs !== undefined) a.timeout_ms = a.timeoutMs;
     if (a.start_line === undefined && a.startLine === undefined && a.lines !== undefined) {
       const r = parseLineRange(a.lines);
       if (r) {
@@ -1714,14 +2544,35 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     return `+${added} / -${removed} lines`;
   }
 
+  /**
+   * Head+tail instead of a blind head cut: the interesting part of a failing
+   * command (stack trace, summary) is very often at the END.
+   */
+  headTail(text, headChars, tailChars) {
+    const s = String(text == null ? '' : text);
+    const h = headChars || 4000;
+    const t = tailChars || 1500;
+    if (s.length <= h + t + 80) return s;
+    const dropped = s.length - h - t;
+    return s.slice(0, h) +
+      `\n[... ${dropped} chars omitted from the middle — re-run with output redirected to a file and read_file it if you need everything ...]\n` +
+      s.slice(s.length - t);
+  }
+
   formatCommandOutput(command, r) {
     if (!r) return `Command "${command}" returned no result.`;
     if (r.error) return `Command failed to start: ${r.error}`;
     let out = `$ ${command}\n`;
-    if (r.stdout) out += r.stdout;
-    if (r.stderr) out += (r.stdout ? '\n[stderr]\n' : '') + r.stderr;
+    if (r.stdout) out += this.headTail(r.stdout, 4000, 1500);
+    if (r.stderr) out += (r.stdout ? '\n[stderr]\n' : '') + this.headTail(r.stderr, 2000, 1500);
     if (!r.stdout && !r.stderr) out += '(no output)\n';
-    out += `\n[exit code: ${r.code}${r.timedOut ? ', TIMED OUT after 60s' : ''}${r.truncated ? ', output truncated' : ''}, ${r.durationMs}ms]`;
+    const code = r.code === undefined || r.code === null ? 'unknown' : r.code;
+    if (code !== 0) {
+      out += `\n[FAILED — exit code ${code}. The command did NOT succeed: fix the cause and re-run, or adapt your plan. Do not report success.]`;
+    } else {
+      out += `\n[exit code: 0`;
+    }
+    out += `${r.timedOut ? ', TIMED OUT' : ''}${r.truncated ? ', output truncated' : ''}, ${r.durationMs}ms]`;
     return out;
   }
 
@@ -1750,6 +2601,8 @@ window.AgentInternals = {
   TOOL_ICONS,
   TOOL_TITLES,
   stripAsciiDecoration,
+  stripLeadingThinking,
+  isDecorativeLine,
   condenseText,
   parseLineRange
 };

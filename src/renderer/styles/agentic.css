@@ -223,6 +223,33 @@
   word-break: break-word;
 }
 
+/* Bulk delete/move plans (delete_files, move_files): the full list of affected
+   paths must be readable before the user approves, so the box is taller and
+   the rows are individually selectable. */
+.tool-card[data-state="awaiting"] .tool-output {
+  max-height: 260px;
+  border-color: #4a3d22;
+  background: #211f1a;
+  color: #d7c9a7;
+  user-select: text;
+}
+
+/* Agent-authored summaries are filtered of decorative ASCII; keep the filtered
+   text visually quieter than raw tool output so the two are distinguishable. */
+.tool-card[data-state="done"] .tool-output,
+.tool-card[data-state="deleted"] .tool-output,
+.tool-card[data-state="moved"] .tool-output,
+.tool-card[data-state="rejected"] .tool-output {
+  max-height: 120px;
+}
+
+/* When "Think: Off" is active there is no thinking bubble, so a running tool
+   card is the only progress signal — give it a touch more presence. */
+.tool-card[data-state="running"] {
+  background: #252526;
+  border-left-color: var(--accent-color, #007acc);
+}
+
 .tool-actions {
   display: flex;
   gap: 6px;

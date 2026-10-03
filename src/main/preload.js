@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readImage: (filePath) => ipcRenderer.invoke('fs:readImage', filePath),
   writeBase64: (filePath, dataUrl) => ipcRenderer.invoke('fs:writeBase64', filePath, dataUrl),
   generateImage: (opts) => ipcRenderer.invoke('ai:generateImage', opts),
+  sysInfo: () => ipcRenderer.invoke('sys:info'),
   writeFile: (filePath, content) => ipcRenderer.invoke('fs:writeFile', filePath, content),
   createFile: (filePath) => ipcRenderer.invoke('fs:createFile', filePath),
   createDirectory: (dirPath) => ipcRenderer.invoke('fs:createDirectory', dirPath),
