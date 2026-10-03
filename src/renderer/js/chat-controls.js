@@ -716,6 +716,10 @@
       var dd = self._openDropdown;
       if (!dd) return;
       if (e && e.target && dd.root && dd.root.contains(e.target)) return;
+      // Focusing the filter box scrolls it into view, which fires a scroll
+      // event on an *ancestor* — that must never close the popup. If focus
+      // is inside the dropdown, the scroll came from the dropdown itself.
+      if (dd.root.contains(document.activeElement)) return;
       dd.close();
     }, true);
   };
