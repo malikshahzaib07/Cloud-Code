@@ -1,0 +1,182 @@
+/* ==========================================================================
+   Cloud Code — Agent advanced features (plan checklist, run summary,
+   dry-run chip). Uses theme variables with hardcoded fallbacks so both the
+   dark (vscode) and light themes render correctly.
+   ========================================================================== */
+
+/* ---------- Live plan checklist card ---------- */
+.cc-plan-card {
+  margin: 6px 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle, #3c3c3c);
+  border-left: 3px solid var(--accent-color, #007acc);
+  border-radius: 4px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
+  color: var(--text-primary, #cccccc);
+  font-size: 12px;
+}
+
+.cc-plan-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text-primary, #cccccc);
+}
+
+.cc-plan-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.cc-plan-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 0;
+  color: var(--text-secondary, #858585);
+}
+
+.cc-plan-item.is-active {
+  color: var(--text-primary, #cccccc);
+}
+
+.cc-plan-item.is-done {
+  color: var(--text-secondary, #858585);
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+
+.cc-plan-mark {
+  display: inline-block;
+  min-width: 14px;
+  color: var(--accent-color, #007acc);
+  font-weight: 700;
+}
+
+.cc-plan-spinner {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--border-subtle, #555555);
+  border-top-color: var(--accent-color, #007acc);
+  border-radius: 50%;
+  animation: cc-plan-spin 0.8s linear infinite;
+  vertical-align: baseline;
+}
+
+@keyframes cc-plan-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------- Run summary card ---------- */
+.cc-run-summary {
+  margin: 6px 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle, #3c3c3c);
+  border-left: 3px solid var(--accent-color, #007acc);
+  border-radius: 4px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
+  color: var(--text-primary, #cccccc);
+  font-size: 12px;
+}
+
+.cc-run-summary.is-stopped {
+  border-left-color: #d16969;
+}
+
+.cc-run-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cc-run-summary-title {
+  font-weight: 600;
+}
+
+.cc-run-summary-stats {
+  margin-top: 3px;
+  color: var(--text-secondary, #858585);
+  font-size: 11px;
+}
+
+/* ---------- Dry run chip ---------- */
+.cc-dryrun-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle, #454545);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary, #858585);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.cc-dryrun-chip:hover {
+  color: var(--text-primary, #cccccc);
+  border-color: var(--accent-color, #007acc);
+}
+
+.cc-dryrun-chip.is-on {
+  color: #ffffff;
+  background: var(--accent-color, #007acc);
+  border-color: var(--accent-color, #007acc);
+}
+
+.cc-dryrun-chip input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* Light theme: agentic.css uses html[data-theme="light"] for light theme rules.
+   Match that selector so our components theme correctly in both modes. */
+html[data-theme="light"] .cc-plan-card,
+html[data-theme="light"] .cc-run-summary {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: var(--border-subtle, #d0d0d0);
+}
+
+html[data-theme="light"] .cc-plan-title,
+html[data-theme="light"] .cc-plan-item.is-active,
+html[data-theme="light"] .cc-run-summary-title {
+  color: var(--text-primary, #1f1f1f);
+}
+
+html[data-theme="light"] .cc-plan-item,
+html[data-theme="light"] .cc-run-summary-stats {
+  color: var(--text-secondary, #6e6e6e);
+}
+
+html[data-theme="light"] .cc-plan-item.is-done {
+  color: var(--text-secondary, #6e6e6e);
+}
+
+html[data-theme="light"] .cc-plan-mark,
+html[data-theme="light"] .cc-plan-spinner {
+  border-color: var(--border-subtle, #b0b0b0);
+}
+
+html[data-theme="light"] .cc-dryrun-chip {
+  border-color: var(--border-subtle, #d0d0d0);
+  color: var(--text-secondary, #6e6e6e);
+}
+
+html[data-theme="light"] .cc-dryrun-chip:hover {
+  color: var(--text-primary, #1f1f1f);
+  border-color: var(--accent-color, #0a66c2);
+}
+
+html[data-theme="light"] .cc-dryrun-chip.is-on {
+  color: #ffffff;
+  background: var(--accent-color, #0a66c2);
+  border-color: var(--accent-color, #0a66c2);
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .cc-plan-spinner { animation: none; }
+}

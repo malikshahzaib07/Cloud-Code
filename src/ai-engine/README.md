@@ -74,8 +74,13 @@ const loop = new CloudAI.AgentLoop({
 
 const result = await loop.run({ messages, systemPrompt });
 // { ok, steps, stopReason, cancelled, finalText, messages, error,
-//   lastError, nudges, retries, trimmed }
+//   lastError, nudges, retries, trimmed, reviewed, usage? }
 ```
+
+`result.usage` carries the summed `{prompt_tokens, completion_tokens,
+total_tokens}` across every model call of the run; it is omitted when the
+server never reported usage. `result.reviewed` is true when the optional
+self-review pass (`review: true`) ran.
 
 `stopReason` is one of `completed`, `cancelled`, `max_steps`, `model_error`,
 `empty_response`, `no_tool_call`. `loop.cancel(reason)` stops it at the next safe

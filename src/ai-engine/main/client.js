@@ -119,6 +119,16 @@ function looksLikeToolRejection(body) {
   return /\btools?\b|tool_calls|tool_choice|function calling|\bfunctions?\b|reasoning/.test(text);
 }
 
+/** Normalise an OpenAI-style `usage` object; returns undefined when absent. */
+function normalizeUsage(usage) {
+  if (!usage || typeof usage !== 'object') return undefined;
+  const out = {};
+  if (usage.prompt_tokens != null) out.prompt_tokens = Number(usage.prompt_tokens) || 0;
+  if (usage.completion_tokens != null) out.completion_tokens = Number(usage.completion_tokens) || 0;
+  if (usage.total_tokens != null) out.total_tokens = Number(usage.total_tokens) || 0;
+  return Object.keys(out).length ? out : undefined;
+}
+
 function parseToolPayload(raw) {
   if (externalParser) {
     try { return externalParser(raw); } catch (e) { /* fall through */ }
@@ -372,6 +382,7 @@ function createAiClient(opts = {}) {
       toolCalls,
       usedNativeTools,
       finishReason: (choice && choice.finish_reason) || null,
+      usage: normalizeUsage(parsed && parsed.usage),
       error: null
     };
   }
@@ -400,6 +411,7 @@ function createAiClient(opts = {}) {
 
     let finished = false;
     let req = null;
+    let usage = null;
 
     const handle = {
       cancelled: false,
@@ -425,7 +437,7 @@ function createAiClient(opts = {}) {
       if (finished) return;
       finished = true;
       streamReq = null;
-      if (!handle.cancelled) emit(onEnd);
+      if (!handle.cancelled) emit(onEnd, usage);
     };
 
     if (!isHttpUrl(config.baseUrl)) {
@@ -480,6 +492,7 @@ function createAiClient(opts = {}) {
               const data = JSON.parse(jsonStr);
               const content = data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content;
               if (content) emit(onChunk, content);
+              if (data.usage) usage = normalizeUsage(data.usage) || usage;
             } catch (e) {
               // ignore non-JSON chunk lines
             }
@@ -625,5 +638,6 @@ module.exports = {
   parseToolPayload,
   fallbackParseToolPayload,
   looksLikeToolRejection,
+  normalizeUsage,
   DEFAULT_TIMEOUT_MS
 };

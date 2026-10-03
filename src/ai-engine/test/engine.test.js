@@ -538,5 +538,145 @@ group('loop — scripted 2-tool run');
       'facade exposes protocol/tools/prompt/AgentLoop/createEngine');
   }
 
+  // --- usage passthrough & accumulation ------------------------------------
+  {
+    const turns = [
+      { content: '', toolCalls: [{ id: 'u1', name: 'list_dir', arguments: { path: '.' } }], usedNativeTools: true,
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+      { content: 'Done.', toolCalls: [], usedNativeTools: true,
+        usage: { prompt_tokens: 20, completion_tokens: 7, total_tokens: 27 } }
+    ];
+    const loop = new AgentLoop({
+      callModel: async () => turns.shift(),
+      executeTool: async () => 'ok'
+    });
+    const r = await loop.run({ messages: [] });
+    eq(r.usage, { prompt_tokens: 30, completion_tokens: 12, total_tokens: 42 }, 'usage summed across steps');
+    ok(r.reviewed === false, 'reviewed false by default');
+  }
+
+  {
+    const loop = new AgentLoop({ callModel: async () => ({ content: 'hi', toolCalls: [] }) });
+    const r = await loop.run({ messages: [] });
+    ok(r.usage === undefined, 'no usage key when the server omits it');
+  }
+
+  // --- review: false → no extra calls --------------------------------------
+  {
+    let calls = 0;
+    const loop = new AgentLoop({
+      callModel: async () => { calls++; return { content: 'Answer.', toolCalls: [] }; }
+    });
+    const r = await loop.run({ messages: [] });
+    eq(calls, 1, 'no review call by default');
+    ok(!r.reviewed, 'reviewed falsy when review is off');
+  }
+
+  // --- review: true, reviewer approves --------------------------------------
+  {
+    let calls = 0;
+    const events = [];
+    const loop = new AgentLoop({
+      review: true,
+      callModel: async () => {
+        calls++;
+        return calls === 1
+          ? { content: 'Original answer.', toolCalls: [] }
+          : { content: 'OK — the answer is correct.', toolCalls: [] };
+      },
+      onEvent: (e) => events.push(e.type)
+    });
+    const r = await loop.run({ messages: [] });
+    eq(calls, 2, 'one extra review call');
+    eq(r.finalText, 'Original answer.', 'original answer kept');
+    eq(r.reviewed, true, 'reviewed true');
+    ok(events.includes('review'), 'review event emitted');
+  }
+
+  // --- review: true, reviewer flags rework ----------------------------------
+  {
+    let calls = 0;
+    const loop = new AgentLoop({
+      maxSteps: 10,
+      review: true,
+      callModel: async (msgs) => {
+        calls++;
+        if (calls === 1) return { content: 'Wrong answer.', toolCalls: [] };
+        if (calls === 2) return { content: 'NEEDS_REWORK — missing a step.', toolCalls: [] };
+        return { content: 'Corrected answer.', toolCalls: [] };
+      },
+      executeTool: async () => ''
+    });
+    const r = await loop.run({ messages: [] });
+    eq(calls, 3, 'answer + review + one corrective call');
+    eq(r.finalText, 'Corrected answer.', 'corrected final answer');
+    eq(r.reviewed, true, 'reviewed true');
+    ok(r.messages.some((m) => m.role === 'system' && /reviewer found issues/.test(m.content)),
+      'corrective system note injected');
+  }
+
+  // --- review respects maxSteps ---------------------------------------------
+  {
+    let calls = 0;
+    const loop = new AgentLoop({
+      maxSteps: 2,
+      review: true,
+      callModel: async () => {
+        calls++;
+        return calls === 1
+          ? { content: '', toolCalls: [{ id: 'x', name: 'list_dir', arguments: {} }], usedNativeTools: true }
+          : { content: 'done', toolCalls: [] };
+      },
+      executeTool: async () => 'ok'
+    });
+    const r = await loop.run({ messages: [] });
+    eq(calls, 2, 'review skipped: step budget exhausted');
+    ok(!r.reviewed, 'not reviewed');
+  }
+
+  // --- review skipped on error / cancelled / max_steps -----------------------
+  {
+    let calls = 0;
+    const errLoop = new AgentLoop({
+      review: true,
+      callModel: async () => { calls++; return { error: 'HTTP 500' }; }
+    });
+    const r1 = await errLoop.run({ messages: [] });
+    eq(calls, 3, 'retries then stop; no review call on error'); // 1 + 2 retries
+    eq(r1.stopReason, 'model_error', 'error stopReason');
+  }
+
+  {
+    let calls = 0;
+    const loop = new AgentLoop({
+      maxSteps: 2,
+      review: true,
+      callModel: async () => {
+        calls++;
+        return { content: '', toolCalls: [{ id: 'y', name: 'list_dir', arguments: {} }], usedNativeTools: true };
+      },
+      executeTool: async () => 'ok'
+    });
+    const r = await loop.run({ messages: [] });
+    eq(calls, 2, 'max_steps: no review call');
+    eq(r.stopReason, 'max_steps', 'max_steps stopReason');
+  }
+
+  {
+    let calls = 0;
+    const loop = new AgentLoop({
+      review: true,
+      callModel: async () => {
+        calls++;
+        loop.cancel();
+        return { content: '', toolCalls: [{ id: 'z', name: 'list_dir', arguments: {} }], usedNativeTools: true };
+      },
+      executeTool: async () => 'ok'
+    });
+    const r = await loop.run({ messages: [] });
+    eq(calls, 1, 'cancelled: no review call');
+    eq(r.stopReason, 'cancelled', 'cancelled stopReason');
+  }
+
   finish();
 })();

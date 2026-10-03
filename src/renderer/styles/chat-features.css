@@ -1,0 +1,81 @@
+/* Chat Features styles — slash popup, token meter, export button. */
+
+.ccf-slash-popup {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-sidebar, #252526);
+  border: 1px solid var(--border-color, #3e3e42);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  z-index: 50;
+  font-size: 12px;
+}
+
+.ccf-slash-popup.hidden {
+  display: none;
+}
+
+.ccf-slash-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--text-primary, #cccccc);
+}
+
+.ccf-slash-item:hover,
+.ccf-slash-item.active {
+  background: var(--list-hover, #2a2d2e);
+}
+
+.ccf-slash-item.active {
+  background: var(--list-active, #094771);
+  color: var(--text-active, #ffffff);
+}
+
+.ccf-slash-label {
+  color: var(--accent-color, #007acc);
+  font-weight: 600;
+  min-width: 86px;
+}
+
+.ccf-slash-item.active .ccf-slash-label {
+  color: var(--text-active, #ffffff);
+}
+
+.ccf-slash-desc {
+  color: var(--text-secondary, #969696);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ccf-slash-item.active .ccf-slash-desc {
+  color: var(--text-primary, #cccccc);
+}
+
+.ccf-token-meter {
+  font-size: 11px;
+  color: var(--text-secondary, #969696);
+  background: var(--bg-input, #3c3c3c);
+  border: 1px solid var(--border-subtle, #2b2b2b);
+  border-radius: 10px;
+  padding: 1px 8px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.ccf-export-btn {
+  margin-left: 4px;
+}
+
+/* The slash popup is absolutely positioned relative to the input wrapper. */
+.input-box-wrapper {
+  position: relative;
+}

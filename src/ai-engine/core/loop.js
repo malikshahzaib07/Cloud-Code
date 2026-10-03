@@ -30,7 +30,7 @@
   const EVENT_TYPES = [
     'step', 'tool_start', 'tool_end', 'tool_error',
     'assistant', 'notice', 'done', 'error',
-    'retry', 'health'
+    'retry', 'health', 'review'
   ];
 
   /** Lazy tools lookup so load order does not matter in the browser. */
@@ -101,6 +101,9 @@
      *        answers in prose while a tool was clearly needed.
      * @param {boolean} [o.requireToolFirstStep=false] — treat a first turn with
      *        no tool call as a protocol failure and correct it.
+     * @param {boolean} [o.review=false] — after a completed answer, ask the
+     *        model to review its own answer once; a "NEEDS_REWORK" verdict
+     *        triggers one corrective follow-up.
      */
     constructor(o) {
       const opts = o || {};
@@ -113,6 +116,7 @@
         ? false
         : !!host.nudgeOnSilentTurns;
       this.requireToolFirstStep = !!opts.requireToolFirstStep;
+      this.review = opts.review === true;
       this.retryDelaysMs = Array.isArray(opts.retryDelaysMs) ? opts.retryDelaysMs.slice() : RETRY_DELAYS_MS.slice();
       // Context budget: { budget, keepRecent, maxChars } — see core/context.js.
       this.contextOptions = opts.context && typeof opts.context === 'object' ? Object.assign({}, opts.context) : {};
@@ -146,7 +150,8 @@
      * @param {Array}  [o.messages]     prior conversation (without the system prompt)
      * @param {string} [o.systemPrompt] prepended as a system message
      * @param {AbortSignal} [o.signal]  external cancellation
-     * @returns {Promise<object>} { ok, steps, stopReason, finalText, messages, error }
+     * @returns {Promise<object>} { ok, steps, stopReason, finalText, messages, error,
+     *     reviewed, usage? }
      */
     async run(o) {
       const opts = o || {};
@@ -154,6 +159,9 @@
       if (opts.systemPrompt) msgs.push({ role: 'system', content: opts.systemPrompt });
       for (const m of (opts.messages || [])) msgs.push(m);
       this.messages = msgs;
+
+      const reviewRequested = opts.review !== undefined ? !!opts.review : this.review;
+      let reviewed = false;
 
       this._controller = typeof AbortController === 'function' ? new AbortController() : null;
       if (opts.signal) {
@@ -175,6 +183,15 @@
       let nudges = 0;
       let retriesUsed = 0;
       let trimmedTotal = 0;
+      // Accumulated token usage across every model call of this run (optional).
+      let usageTotal = null;
+      const addUsage = (u) => {
+        if (!u || typeof u !== 'object') return;
+        if (!usageTotal) usageTotal = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+        usageTotal.prompt_tokens += Number(u.prompt_tokens) || 0;
+        usageTotal.completion_tokens += Number(u.completion_tokens) || 0;
+        usageTotal.total_tokens += Number(u.total_tokens) || 0;
+      };
       const contextOpts = Object.assign({}, this.contextOptions,
         opts.context && typeof opts.context === 'object' ? opts.context : {});
       this.lastError = null;
@@ -265,6 +282,8 @@
             stopReason = 'model_error';
             break;
           }
+
+          addUsage(res.usage);
 
           if (res.toolsRejected && useNativeTools) {
             useNativeTools = false;
@@ -385,6 +404,59 @@
       if (stopReason === 'cancelled') {
         this._emit({ type: 'notice', text: 'Agent stopped.', step: this.step, cancelled: true });
       }
+
+      // --- optional self-review pass -----------------------------------------
+      // One critic call; a NEEDS_REWORK verdict buys exactly one corrective
+      // follow-up. Skipped on error/cancel/max_steps, and never over maxSteps.
+      if (reviewRequested && stopReason === 'completed' && !this._aborted(signal)) {
+        try {
+          if (this.step < this.maxSteps) {
+            this.step += 1;
+            const reviewMessages = this.messages.concat([{
+              role: 'user',
+              content:
+                'Critically review your last answer for correctness and missing steps. ' +
+                'Be brief. If it is correct, reply with "OK". If it needs changes, ' +
+                'start your reply with "NEEDS_REWORK" and say why in one line.'
+            }]);
+            let rres;
+            try {
+              rres = await this.callModel(reviewMessages, { signal, useNativeTools: true, step: this.step });
+            } catch (err) {
+              rres = { error: err && err.message ? err.message : String(err) };
+            }
+            if (rres && !rres.error) {
+              addUsage(rres.usage);
+              const reviewText = String(rres.content || '').trim();
+              reviewed = true;
+              this._emit({ type: 'review', text: reviewText, step: this.step });
+              if (/needs_rework/i.test(reviewText) && this.step < this.maxSteps && !this._aborted(signal)) {
+                this.step += 1;
+                this.messages.push({
+                  role: 'system',
+                  content: 'The reviewer found issues. Provide the corrected final answer now.'
+                });
+                let cres;
+                try {
+                  cres = await this.callModel(this.messages, { signal, useNativeTools: true, step: this.step });
+                } catch (err) {
+                  cres = { error: err && err.message ? err.message : String(err) };
+                }
+                if (cres && !cres.error) {
+                  addUsage(cres.usage);
+                  const corrected = protocol().stripAsciiDecoration(String(cres.content || '').trim());
+                  if (corrected) {
+                    finalText = corrected;
+                    this.messages.push({ role: 'assistant', content: corrected });
+                    this._emit({ type: 'assistant', content: corrected, step: this.step });
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) { /* a failed review must never break the run */ }
+      }
+
       const result = {
         ok: stopReason === 'completed',
         steps: this.step,
@@ -396,8 +468,10 @@
         lastError: this.lastError,
         nudges,
         retries: retriesUsed,
-        trimmed: trimmedTotal
+        trimmed: trimmedTotal,
+        reviewed
       };
+      if (usageTotal) result.usage = usageTotal;
       this._emit({ type: 'done', result });
       return result;
     }

@@ -622,6 +622,14 @@ class AgentController {
     this.sessionAllow = new Set();
     this._stopNotified = false;
     this._activeReqId = null;
+    // Per-run counters for the AgentFeatures summary card.
+    this._runActive = true;
+    this._runStart = Date.now();
+    this._runTools = 0;
+    this._runCommands = 0;
+    this._runFiles = new Set();
+    this._runStopped = false;
+    this._runError = false;
     if (ai) ai.setSendButtonState(true);
 
     if (ai) ai.appendUserMessage(displayText, preview || '');
@@ -640,6 +648,7 @@ class AgentController {
       await this.loop();
     } catch (err) {
       console.error('Agent loop crashed:', err);
+      this._runError = true;
       this.pushAssistant('⚠ Agent error: ' + (err && err.message ? err.message : String(err)));
     } finally {
       this.setRunning(false);
@@ -650,6 +659,20 @@ class AgentController {
       this.clearThinkingNodes();
       this.releaseApprovals();
       if (ai) ai.setSendButtonState(false);
+      this._runActive = false;
+      // Run summary for AgentFeatures (window.agent.lastRunSummary + event).
+      try {
+        const summary = {
+          durationMs: Date.now() - (this._runStart || Date.now()),
+          tools: this._runTools || 0,
+          filesChanged: this._runFiles ? this._runFiles.size : 0,
+          commands: this._runCommands || 0,
+          ok: !(this._runStopped || this._runError)
+        };
+        this.lastRunSummary = summary;
+        if (window.agent) window.agent.lastRunSummary = summary;
+        window.dispatchEvent(new CustomEvent('agent:run-finished', { detail: summary }));
+      } catch (e) { /* CustomEvent unavailable */ }
     }
   }
 
@@ -985,6 +1008,7 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       this._stopNotified = true;
       this.pushNotice('⏹ Agent stopped.');
     }
+    this._runStopped = !!this.cancelRequested;
     if (!finalSummary) {
       // Final `done` event: this is the documented contract that lets the chat
       // thinking panel close/clear itself after a stop. It must be emitted
@@ -1017,6 +1041,39 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
   // Single tool call: prepare → (permission) → execute
   // ==========================================================================
   async executeToolCall(tc) {
+    // Live progress events for AgentFeatures (plan checklist / summary card).
+    try { window.dispatchEvent(new CustomEvent('agent:tool-start', { detail: { name: tc && tc.name } })); } catch (e) { /* no CustomEvent */ }
+    let ok = true;
+    try {
+      const out = await this._executeToolCallImpl(tc);
+      ok = !/^(Error|Cancelled|The user rejected)/.test(String(out == null ? '' : out));
+      // Per-run counters rendered by AgentFeatures' summary card.
+      if (this._runActive) {
+        this._runTools += 1;
+        const nm = (tc && tc.name) || '';
+        const a = (tc && tc.arguments) || {};
+        if (nm === 'run_command') this._runCommands += 1;
+        if ((nm === 'edit_file' || nm === 'write_file' || nm === 'delete_file' || nm === 'move_file') && a.path) this._runFiles.add(a.path);
+        if (nm === 'delete_files') {
+          if (Array.isArray(a.paths)) a.paths.forEach((p) => this._runFiles.add(p));
+          else if (a.path) this._runFiles.add(a.path);
+        }
+        if (nm === 'move_files') {
+          if (Array.isArray(a.files)) a.files.forEach((f) => { if (f && f.from) this._runFiles.add(f.from); });
+          else if (a.from) this._runFiles.add(a.from);
+          else if (a.path) this._runFiles.add(a.path);
+        }
+      }
+      return out;
+    } catch (err) {
+      ok = false;
+      throw err;
+    } finally {
+      try { window.dispatchEvent(new CustomEvent('agent:tool-end', { detail: { name: tc && tc.name, ok } })); } catch (e) { /* no CustomEvent */ }
+    }
+  }
+
+  async _executeToolCallImpl(tc) {
     const name = tc.name;
     const args = this.normalizeArgs(name, tc.arguments || {});
     const card = this.renderToolCard(name, args);
@@ -1864,9 +1921,12 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     const mode = window.AppSettings ? window.AppSettings.get('agentMode') : 'ask';
     const category = plan.kind === 'command' ? 'command' : 'edit';
 
-    if (this.sessionAllow.has(category)) return Promise.resolve(true);
-    if (mode === 'full-auto') return Promise.resolve(true);
-    if (mode === 'edit-auto' && category === 'edit') return Promise.resolve(true);
+    // Dry run: the approval gate is forced ON for every mutating action, even
+    // in Fully-auto / edit-auto mode or when the session pre-approved it.
+    const dryRun = (typeof window !== 'undefined' && window.agentDryRun === true);
+    if (!dryRun && this.sessionAllow.has(category)) return Promise.resolve(true);
+    if (!dryRun && mode === 'full-auto') return Promise.resolve(true);
+    if (!dryRun && mode === 'edit-auto' && category === 'edit') return Promise.resolve(true);
 
     return new Promise((resolve) => {
       let settled = false;
