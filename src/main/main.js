@@ -34,7 +34,7 @@ const DEFAULT_SETTINGS = {
   maxSteps: 15,                // agent loop iteration cap
   autocompleteEnabled: true,   // ghost-text inline completions
   autocompleteDelay: 350,      // ms of idle before requesting a completion
-  agentAllowOutsideWorkspace: false, // allow the agent to touch files outside the workspace
+  agentAllowOutsideWorkspace: true, // agent may read/write paths outside the workspace (edits still need approval)
   agentMaxTokens: 4096,        // token budget per agent turn (long file writes)
   aiBaseUrl: null,             // overrides .env.local when set
   aiApiKey: null,

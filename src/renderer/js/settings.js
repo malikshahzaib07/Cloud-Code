@@ -12,7 +12,7 @@ window.AppSettings = {
     maxSteps: 15,
     autocompleteEnabled: true,
     autocompleteDelay: 350,
-    agentAllowOutsideWorkspace: false,
+    agentAllowOutsideWorkspace: true,
     agentMaxTokens: 4096
   },
   data: {},

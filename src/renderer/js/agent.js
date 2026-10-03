@@ -40,6 +40,40 @@ const AGENT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'list_tree',
+      description: 'Recursively show the structure of a folder (directories and files). Use this FIRST to orient yourself in an unfamiliar codebase instead of calling list_dir over and over.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Directory to walk, relative to the workspace root. Defaults to "." (whole project).' },
+          depth: { type: 'number', description: 'How many levels deep to walk (default 3, max 8).' },
+          include_files: { type: 'boolean', description: 'Include file names as well as folders (default true).' },
+          glob: { type: 'string', description: 'Only include files matching this pattern, e.g. "*.js".' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_files',
+      description: 'Find files by NAME anywhere in the workspace (substring, /regex/ or glob). Use when you roughly know what a file is called but not where it lives.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'Case-insensitive substring, or /regex/, matched against the file name and path.' },
+          glob: { type: 'string', description: 'Glob such as "*.test.js" or "**/config/*.json".' },
+          path: { type: 'string', description: 'Restrict the search to this subdirectory.' },
+          limit: { type: 'number', description: 'Maximum results (default 100, max 500).' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'search_code',
       description: 'Search file contents across the workspace (literal or regex text search).',
       parameters: {
@@ -205,6 +239,16 @@ function parseLineRange(v) {
   }
   return null;
 }
+
+/**
+ * Directories that are never worth showing or searching: dependencies, VCS
+ * metadata and build output (so exploring never drowns in generated copies).
+ */
+const NOISE_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'release', 'out', 'coverage',
+  '.next', '.nuxt', '.cache', '.venv', 'venv', '__pycache__', 'target',
+  '.idea', '.gradle', '.pytest_cache', 'vendor', 'out-tsc'
+]);
 
 class AgentController {
   constructor() {
@@ -429,14 +473,22 @@ class AgentController {
 Deliver the ENTIRE requested feature, end to end, in this single turn — working, runnable code saved to disk and verified with tools. You can only learn about this project through your tools; never assume what a file contains.
 
 ## TOOLS (use these exact names and argument names)
-1. list_dir   {"path":"<dir>"} — list a folder ("." = workspace root).
-2. read_file  {"path":"<file>"} — whole file; add {"start_line":10,"end_line":60} for large files.
-3. search_code {"query":"<text>"} — search the workspace; optional {"glob":"*.js"}, {"regex":true}.
-4. edit_file  {"path":"<file>","old_string":"<exact text that exists>","new_string":"<replacement>","replace_all":false}
-5. write_file {"path":"<file>","content":"<the complete file content>"} — create or deliberately overwrite.
-6. delete_file {"path":"<file or empty folder>"} — deletes a file, or a folder ONLY when empty.
-7. move_file  {"path":"<from>","to":"<to>","overwrite":false} — rename/move; dest folders auto-created.
-8. run_command {"command":"<powershell command>"} — run in the workspace root.
+1. list_tree  {"path":"."} — the folder structure at a glance; optional {"depth":4}, {"glob":"*.js"}, {"include_files":false}. Start here.
+2. find_files {"pattern":"user"} — find files by NAME anywhere; also {"glob":"*.test.js"}, {"path":"src"}, {"limit":200}.
+3. list_dir   {"path":"<dir>"} — one folder's entries ("." = workspace root).
+4. read_file  {"path":"<file>"} — whole file; add {"start_line":10,"end_line":60} for large files.
+5. search_code {"query":"<text>"} — search file contents; optional {"glob":"*.js"}, {"regex":true}, {"path":"src"}.
+6. edit_file  {"path":"<file>","old_string":"<exact text that exists>","new_string":"<replacement>","replace_all":false}
+7. write_file {"path":"<file>","content":"<the complete file content>"} — create or deliberately overwrite.
+8. delete_file {"path":"<file or empty folder>"} — deletes a file, or a folder ONLY when empty.
+9. move_file  {"path":"<from>","to":"<to>","overwrite":false} — rename/move; dest folders auto-created.
+10. run_command {"command":"<powershell command>"} — run in the workspace root.
+
+## FINDING YOUR WAY AROUND (do this before you claim anything is missing)
+- Never guess that a file does not exist. Search by NAME with find_files, then by CONTENT with search_code, then list_tree the area.
+- One list_tree call shows far more structure than a chain of list_dir calls — use it first in an unfamiliar project.
+- read_file tells you the exact next call when a file is too long to return whole; follow that instruction instead of guessing.
+- When the user names a feature ("auth", "payments"), find_files/search_code first, then read the real files before answering.
 
 ## COMPLETENESS RULES (violating these is a failure)
 - Implement the WHOLE request in one turn. No placeholders, no "// ...rest of implementation", no TODO, no empty or stubbed function bodies, no "you can extend this further", no "apply the same change elsewhere".
@@ -447,7 +499,7 @@ Deliver the ENTIRE requested feature, end to end, in this single turn — workin
 - Reuse the project's existing utilities; never add a dependency unless the user asked.
 
 ## WORKFLOW
-1. ORIENT  — list_dir, then read_file the target and at least one sibling.
+1. ORIENT  — list_tree (or find_files for a named feature), then read_file the target and at least one sibling.
 2. PLAN    — decide the full set of changes before acting.
 3. ACT     — write_file / edit_file file by file, one tool call per turn.
 4. VERIFY  — read_file the result back, and run the project's build/test/lint via run_command when one exists (check package.json). Fix any failure, then re-verify.
@@ -726,9 +778,17 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
               out = r.content + flag;
             } else {
               const full = await window.electronAPI.readFile(file);
-              if (full.length > 80000) {
-                out = full.slice(0, 80000) +
-                  `\n[...truncated: file is ${full.length} chars. Use start_line/end_line to read the rest.]`;
+              if (full.length > 120000) {
+                const head = full.slice(0, 120000);
+                const linesRead = head.split('\n').length;
+                const totalLines = full.split('\n').length;
+                // The hint goes FIRST as well as last: long results are clipped
+                // before they reach the model, and a clipped-away footer is
+                // exactly what used to leave it unable to continue reading.
+                out = `[large file: ${full.length} chars, ${totalLines} lines total. Showing the first ${linesRead} line(s). ` +
+                  `Continue with read_file {"path":"${args.path}","start_line":${linesRead + 1}}]\n\n` +
+                  head +
+                  `\n\n[end of the shown portion — ${linesRead} of ${totalLines} lines read]`;
               } else {
                 out = full;
               }
@@ -737,24 +797,113 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
           }
         };
       }
-      case 'search_code': {
-        const query = String(args.query || '');
-        if (!query) throw new Error('search_code requires a query.');
-        const root = window.explorer.rootPath;
+      case 'list_tree': {
+        const dir = this.resolvePath(args.path || '.');
+        const maxDepth = Math.min(8, Math.max(1, parseInt(args.depth, 10) || 3));
+        const includeFiles = args.include_files === undefined ? true : !!args.include_files;
+        const globStr = String(args.glob || args.filter || '').trim();
+        const globRe = globStr ? this.globToRegExp(globStr) : null;
+        const IGNORE = NOISE_DIRS;
         return {
           kind: 'read',
           run: async () => {
-            const res = await window.electronAPI.searchInFiles(root, query, {
+            const lines = [];
+            let count = 0;
+            const LIMIT = 3000;
+            const walk = async (current, prefix, depth) => {
+              if (depth > maxDepth || count >= LIMIT) return;
+              let entries;
+              try {
+                entries = await window.electronAPI.readDirectory(current);
+              } catch (e) {
+                lines.push(prefix + '  [unreadable]');
+                return;
+              }
+              entries.sort((a, b) => {
+                if (a.isDirectory === b.isDirectory) return a.name.localeCompare(b.name);
+                return a.isDirectory ? -1 : 1;
+              });
+              for (const e of entries) {
+                if (count >= LIMIT) return;
+                if (e.isDirectory) {
+                  if (IGNORE.has(e.name)) continue;
+                  lines.push(prefix + e.name + '/');
+                  count++;
+                  await walk(current + '/' + e.name, prefix + e.name + '/', depth + 1);
+                } else if (includeFiles) {
+                  if (globRe && !globRe.test(e.name)) continue;
+                  lines.push(prefix + e.name);
+                  count++;
+                }
+              }
+            };
+            await walk(dir, '', 1);
+            if (!lines.length) return '(no matching files or folders)';
+            const more = count >= LIMIT
+              ? `\n[...stopped after ${LIMIT} entries — narrow "path" or set "glob"]`
+              : '';
+            return lines.join('\n') + more;
+          }
+        };
+      }
+      case 'find_files': {
+        const sub = args.path ? this.resolvePath(args.path) : this.resolvePath('.');
+        const pattern = String(args.pattern || args.name || args.query || args.text || '').trim();
+        const globStr = String(args.glob || '').trim();
+        const limit = Math.min(500, Math.max(1, parseInt(args.limit, 10) || 100));
+        const globRe = globStr ? this.globToRegExp(globStr) : null;
+        let nameRe = null;
+        if (pattern) {
+          const m = pattern.match(/^\/(.*)\/([gimsuy]*)$/);
+          const body = m ? m[1] : pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          try {
+            nameRe = new RegExp(body, m ? (m[2] || 'i') : 'i');
+          } catch (e) {
+            nameRe = null;
+          }
+        }
+        return {
+          kind: 'read',
+          run: async () => {
+            const files = (await window.electronAPI.listFilesRecursive(sub, 20000)) || [];
+            const hits = files.filter((f) => {
+              // Skip build output / vendored noise the same way list_tree does.
+              const rel = String(f.relPath || '');
+              if (rel.split('/').some((seg) => NOISE_DIRS.has(seg))) return false;
+              if (nameRe && !nameRe.test(f.name) && !nameRe.test(f.relPath)) return false;
+              if (globRe && !globRe.test(f.relPath) && !globRe.test(f.name)) return false;
+              return true;
+            });
+            if (!hits.length) {
+              return `No files matched${pattern ? ` "${pattern}"` : ''}${globStr ? ` glob "${globStr}"` : ''} under ${sub}.`;
+            }
+            const shown = hits.slice(0, limit);
+            const more = hits.length > limit
+              ? `\n[${hits.length - limit} more matches — raise "limit" or narrow the pattern]`
+              : '';
+            return `${hits.length} match(es):\n` + shown.map((f) => f.relPath).join('\n') + more;
+          }
+        };
+      }
+      case 'search_code': {
+        const query = String(args.query || '');
+        if (!query) throw new Error('search_code requires a query.');
+        // Optional scope: search inside a subfolder instead of the whole project.
+        const scope = args.path ? this.resolvePath(args.path) : (window.explorer.rootPath || null);
+        return {
+          kind: 'read',
+          run: async () => {
+            const res = await window.electronAPI.searchInFiles(scope, query, {
               glob: args.glob || undefined,
               regex: !!args.regex,
               caseSensitive: !!args.case_sensitive,
-              maxResults: 60,
-              maxPerFile: 10
+              maxResults: 120,
+              maxPerFile: 12
             });
             if (res && res.error) throw new Error(res.error);
-            if (!res || !res.length) return `No matches for "${query}"${args.glob ? ' in ' + args.glob : ''}.`;
+            if (!res || !res.length) return `No matches for "${query}"${args.glob ? ' in ' + args.glob : ''}${scope ? ' under ' + scope : ''}.`;
             const lines = res.map((r) => `${r.relPath}:${r.line}: ${r.text}`);
-            const more = res.length >= 60 ? '\n[results capped at 60]' : '';
+            const more = res.length >= 120 ? '\n[results capped at 120 — narrow with "glob" or "path"]' : '';
             return lines.join('\n') + more;
           }
         };
@@ -1450,6 +1599,24 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       if (query !== undefined && a.query === undefined) a.query = query;
     }
 
+    if (name === 'find_files') {
+      const pattern = pick('pattern', 'name', 'filename', 'file_name', 'query', 'text', 'contains', 'match');
+      if (pattern !== undefined && a.pattern === undefined) a.pattern = pattern;
+      const glob = pick('glob', 'filter', 'extension', 'ext', 'mask');
+      if (glob !== undefined && a.glob === undefined) a.glob = glob;
+      const inDir = pick('in', 'dir', 'directory', 'folder', 'under');
+      if (inDir !== undefined && a.path === undefined) a.path = inDir;
+      const lim = pick('limit', 'max', 'max_results', 'maxResults', 'count');
+      if (lim !== undefined && a.limit === undefined) a.limit = lim;
+    }
+
+    if (name === 'list_tree') {
+      const depth = pick('depth', 'levels', 'max_depth', 'maxDepth', 'level');
+      if (depth !== undefined && a.depth === undefined) a.depth = depth;
+      const glob = pick('glob', 'filter', 'only', 'extension', 'ext');
+      if (glob !== undefined && a.glob === undefined) a.glob = glob;
+    }
+
     if (name === 'move_file' || name === 'rename_file') {
       const from = pick('from', 'source', 'src', 'source_path', 'sourcePath',
         'old_path', 'oldPath', 'old_name', 'oldName', 'path');
@@ -1479,13 +1646,15 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     if (command !== undefined && a.command === undefined) a.command = command;
 
     // stringly-typed booleans
-    for (const k of ['replace_all', 'replaceAll', 'regex', 'case_sensitive', 'caseSensitive', 'overwrite']) {
+    for (const k of ['replace_all', 'replaceAll', 'regex', 'case_sensitive', 'caseSensitive',
+      'overwrite', 'include_files', 'includeFiles', 'files', 'with_files']) {
       if (typeof a[k] === 'string') a[k] = /^(true|yes|1)$/i.test(a[k].trim());
     }
     if (a.replace_all === undefined && a.replaceAll !== undefined) a.replace_all = a.replaceAll;
 
-    // stringly-typed line numbers
-    for (const k of ['start_line', 'startLine', 'end_line', 'endLine']) {
+    // stringly-typed numbers
+    for (const k of ['start_line', 'startLine', 'end_line', 'endLine', 'depth', 'limit',
+      'max_depth', 'maxDepth']) {
       if (typeof a[k] === 'string' && /^\d+$/.test(a[k].trim())) a[k] = parseInt(a[k], 10);
     }
     if (a.start_line === undefined && a.startLine === undefined && a.lines !== undefined) {
@@ -1496,6 +1665,30 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       }
     }
     return a;
+  }
+
+  /** Convert a glob ("**\/config/*.json") to a case-insensitive RegExp. */
+  globToRegExp(glob) {
+    const src = String(glob == null ? '' : glob).trim();
+    let out = '';
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '*') {
+        if (src[i + 1] === '*') {
+          if (src[i + 2] === '/') { out += '(?:.*/)?'; i += 2; }
+          else { out += '.*'; i += 1; }
+        } else {
+          out += '[^/]*';
+        }
+      } else if (ch === '?') {
+        out += '[^/]';
+      } else if ('.+^${}()|[]\\/'.indexOf(ch) !== -1) {
+        out += '\\' + ch;
+      } else {
+        out += ch;
+      }
+    }
+    return new RegExp('^' + out + '$', 'i');
   }
 
   /** Token budget for one agent turn (longer file writes need headroom). */
