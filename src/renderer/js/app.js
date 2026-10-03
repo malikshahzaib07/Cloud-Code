@@ -215,6 +215,38 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   window.addEventListener('theme-changed', syncNav);
 
+  // ---------------------------------------------------------------------------
+  // Keep the model the agent actually uses in sync with the saved config.
+  // The settings modal (or a restored value) can change the model without the
+  // chat dropdown knowing, which used to leave the agent running the old model.
+  // ---------------------------------------------------------------------------
+  async function syncModelSelection() {
+    const sel = document.getElementById('model-select');
+    if (!sel || !window.electronAPI || !window.electronAPI.getAiConfig) return;
+    try {
+      const cfg = await window.electronAPI.getAiConfig();
+      if (!cfg || !cfg.model || sel.value === cfg.model) return;
+      if (!Array.prototype.some.call(sel.options, (o) => o.value === cfg.model)) {
+        const opt = document.createElement('option');
+        opt.value = cfg.model;
+        opt.textContent = cfg.model;
+        sel.appendChild(opt);
+      }
+      sel.value = cfg.model;
+      try {
+        window.dispatchEvent(new CustomEvent('chat:model-changed', { detail: { model: cfg.model } }));
+      } catch (e) {
+        // CustomEvent unavailable
+      }
+    } catch (e) {
+      // Config unavailable — leave the current selection alone.
+    }
+  }
+  setInterval(syncModelSelection, 2000);
+  window.addEventListener('focus', syncModelSelection);
+  window.addEventListener('settings-changed', syncModelSelection);
+  setTimeout(syncModelSelection, 1500);
+
   const paletteBtn = document.getElementById('command-palette-btn');
   if (paletteBtn && window.palette) {
     paletteBtn.onclick = () => window.palette.open('commands');

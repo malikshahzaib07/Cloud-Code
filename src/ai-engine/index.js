@@ -5,6 +5,7 @@
 // registers window.CloudAI:
 //
 //   <script src="core/protocol.js"></script>
+//   <script src="core/model-adapters.js"></script>
 //   <script src="core/tools.js"></script>
 //   <script src="core/prompt.js"></script>
 //   <script src="core/loop.js"></script>
@@ -22,11 +23,12 @@
   }
 
   const protocol = pick('protocol');
+  const adapters = pick('model-adapters');
   const tools = pick('tools');
   const prompt = pick('prompt');
   const loop = pick('loop');
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
 
   /**
    * createEngine(options)
@@ -46,9 +48,15 @@
     return {
       version: VERSION,
       protocol,
+      adapters,
       tools,
       prompt,
       AgentLoop: loop.AgentLoop,
+
+      /** The adapter for a model id (or null when unknown). */
+      adapter(modelId) {
+        return adapters.getAdapter(modelId);
+      },
 
       /** Build the system prompt, merging engine defaults with per-call options. */
       systemPrompt(overrides) {
@@ -74,6 +82,7 @@
   const CloudAI = {
     version: VERSION,
     protocol,
+    adapters,
     tools,
     prompt,
     AgentLoop: loop.AgentLoop,

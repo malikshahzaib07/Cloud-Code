@@ -423,6 +423,22 @@ class AgentController {
     this.diffSeq = 0;
     this._lastPreview = '';
 
+    // --- Stop machinery -----------------------------------------------------
+    // Every timer the agent owns is registered here so a stop can wipe them all
+    // at once (no stray debounce firing after the run is gone).
+    this._timers = new Set();
+    // Resolvers of approvals the user has not answered yet. A stop resolves them
+    // as "cancelled" so the chat can never hang on an unanswered approval card.
+    this._pendingApprovals = new Set();
+    // "Thinking…" placeholder nodes currently in the chat; a stop removes them
+    // so no spinner is left spinning.
+    this._thinkingNodes = new Set();
+    // Guards the "Agent stopped." notice so it can appear exactly once per run,
+    // no matter how many stop paths fire (loop tail + run finalizer).
+    this._stopNotified = false;
+    // Id of the in-flight aiChatOnce request ('agent-<reqSeq>'), or null.
+    this._activeReqId = null;
+
     this.buildUi();
     this.bindUi();
   }
@@ -506,8 +522,42 @@ class AgentController {
     }
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') this.hideChangesPopup();
+      if (e.key !== 'Escape') return;
+      this.hideChangesPopup();
+      // Escape is also the universal "stop" while a task runs — but only when no
+      // popup owns it, otherwise it would steal Escape from dropdowns/dialogs.
+      if (!this.running || this.cancelRequested) return;
+      const POPUPS = '.dd-menu:not([hidden]), .ctx-menu, .cc-dialog-overlay, .sess-overlay, .mem-overlay';
+      let popup = null;
+      try { popup = document.querySelector(POPUPS); } catch (err) { popup = null; }
+      if (popup) return;
+      e.preventDefault();
+      this.requestStop();
     });
+  }
+
+  /**
+   * Register a timer the agent owns so a stop can clear it. Returns the id.
+   */
+  setTimer(fn, ms) {
+    const id = setTimeout(() => {
+      this._timers.delete(id);
+      fn();
+    }, ms);
+    this._timers.add(id);
+    return id;
+  }
+
+  /** Clear every timer the agent still owns (debounces, approval timeouts…). */
+  clearTimers() {
+    for (const id of this._timers) clearTimeout(id);
+    this._timers.clear();
+  }
+
+  /** Drop every "Thinking…" placeholder so no spinner outlives the run. */
+  clearThinkingNodes() {
+    for (const node of Array.from(this._thinkingNodes)) this.removeNode(node);
+    this._thinkingNodes.clear();
   }
 
   setVisible(visible) {
@@ -520,13 +570,28 @@ class AgentController {
     if (el) el.textContent = text || '';
   }
 
+  /** Flag the run bar as "unwinding" so the UI reads as stopping, not idle. */
+  setStopping(stopping) {
+    const bar = document.getElementById('agent-run-bar');
+    if (bar) bar.setAttribute('data-stopping', stopping ? '1' : '0');
+  }
+
   setRunning(running) {
     this.running = running;
     const stopBtn = document.getElementById('agent-stop-btn');
-    if (stopBtn) stopBtn.classList.toggle('hidden', !running);
+    if (stopBtn) {
+      stopBtn.classList.toggle('hidden', !running);
+      // A fresh run always starts with an armed stop button.
+      if (running) stopBtn.disabled = false;
+    }
     const statusItem = document.getElementById('statusbar-agent-steps');
     if (statusItem) statusItem.classList.toggle('hidden', !running);
-    if (!running) this.setStatus('');
+    if (running) {
+      this.setStopping(false);
+    } else {
+      this.setStopping(false);
+      this.setStatus('');
+    }
   }
 
   updateStepBadge() {
@@ -555,6 +620,8 @@ class AgentController {
     this.cancelRequested = false;
     this.step = 0;
     this.sessionAllow = new Set();
+    this._stopNotified = false;
+    this._activeReqId = null;
     if (ai) ai.setSendButtonState(true);
 
     if (ai) ai.appendUserMessage(displayText, preview || '');
@@ -576,17 +643,71 @@ class AgentController {
       this.pushAssistant('⚠ Agent error: ' + (err && err.message ? err.message : String(err)));
     } finally {
       this.setRunning(false);
+      this._activeReqId = null;
+      // Nothing may outlive the run: timers, placeholders and unanswered
+      // approvals are all released here.
+      this.clearTimers();
+      this.clearThinkingNodes();
+      this.releaseApprovals();
       if (ai) ai.setSendButtonState(false);
     }
   }
 
+  /**
+   * Stop the run now.
+   *
+   * Cancel sequence (exact order):
+   *   1. bail out when nothing is running, or when a stop is already in flight
+   *      (repeated clicks / send-button presses are then no-ops);
+   *   2. `cancelRequested = true` — every await point in the loop re-checks it;
+   *   3. arm the UI: stop button disabled, status "Stopping…";
+   *   4. destroy the in-flight HTTP request via aiCancelOnce so the renderer
+   *      does not sit waiting for a model response that is already unwanted;
+   *   5. resolve every pending approval as "cancelled";
+   *   6. clear all timers and remove the "Thinking…" placeholders.
+   *
+   * The loop tail emits the single "⏹ Agent stopped." notice and the final
+   * `agent:thinking` `done` event that lets the chat panel clean itself up.
+   */
   requestStop() {
-    if (!this.running) return;
+    if (!this.running) return;              // no run in progress → no-op
+    if (this.cancelRequested) return;      // stop already requested → no-op
+
     this.cancelRequested = true;
+
+    // (3) instant UI feedback — the button must never look clickable again.
+    const stopBtn = document.getElementById('agent-stop-btn');
+    if (stopBtn) stopBtn.disabled = true;
+    this.setStopping(true);
     this.setStatus('Stopping…');
-    // cancel any in-flight completion
-    if (window.electronAPI && window.electronAPI.aiCancelOnce) {
-      window.electronAPI.aiCancelOnce('agent-' + this.reqSeq);
+
+    // (4) abort the in-flight request. The main process keys requests by the
+    // 'agent-<reqSeq>' id we sent; the bare reqSeq is tried too (defensively,
+    // some bridges key on the raw number). Both may be missing/throw.
+    const reqId = this._activeReqId || ('agent-' + this.reqSeq);
+    const api = window.electronAPI;
+    if (api && typeof api.aiCancelOnce === 'function') {
+      try { api.aiCancelOnce(reqId); } catch (e) { /* bridge unavailable */ }
+      try { if (reqId !== String(this.reqSeq)) api.aiCancelOnce(this.reqSeq); } catch (e) { /* ignore */ }
+    }
+
+    // (5) an approval card the user never answered must not keep the run alive.
+    this.releaseApprovals();
+
+    // (6) no stray debounce, no spinning placeholder after the stop.
+    this.clearTimers();
+    this.clearThinkingNodes();
+  }
+
+  /**
+   * Resolve every outstanding approval request as "cancelled". The promise
+   * settles with `false` (do not execute) and the card is marked cancelled.
+   */
+  releaseApprovals() {
+    const pending = Array.from(this._pendingApprovals);
+    this._pendingApprovals.clear();
+    for (const resolver of pending) {
+      try { resolver(false, false, true); } catch (e) { /* card already gone */ }
     }
   }
 
@@ -782,9 +903,13 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
 
       const thinking = this.thinkOff ? null : this.pushThinking();
       let res = null;
+      // The id we register with the main process, so requestStop() can abort
+      // exactly this HTTP request instead of waiting for the model to finish.
+      const reqId = 'agent-' + (this.reqSeq + 1);
+      this._activeReqId = reqId;
       try {
         res = await window.electronAPI.aiChatOnce({
-          id: 'agent-' + (++this.reqSeq),
+          id: reqId,
           model,
           messages: this.messages,
           tools: this.useNativeTools ? AGENT_TOOLS : undefined,
@@ -794,13 +919,18 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       } catch (err) {
         res = { error: err && err.message ? err.message : String(err) };
       } finally {
+        this.reqSeq += 1;
+        if (this._activeReqId === reqId) this._activeReqId = null;
         this.removeNode(thinking);
       }
 
+      // A response that lands after the stop is discarded wholesale: no tool is
+      // executed, nothing is pushed into the transcript, and the loop exits now
+      // instead of starting another step.
       if (this.cancelRequested) break;
       if (!res) break;
       if (res.error) {
-        if (/cancel|destroy|socket|ECONNRESET|timed out/i.test(res.error) && this.cancelRequested) break;
+        if (this.cancelRequested) break;
         this.pushAssistant(`⚠ **Agent request failed:** ${res.error}`);
         break;
       }
@@ -849,13 +979,19 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       }
     }
 
-    if (this.cancelRequested) {
+    // Exactly one "stopped" notice per run, regardless of which path broke the
+    // loop (abort, cancelled approval, max steps reached mid-flight).
+    if (this.cancelRequested && !this._stopNotified) {
+      this._stopNotified = true;
       this.pushNotice('⏹ Agent stopped.');
-      this.cancelRequested = false;
     }
     if (!finalSummary) {
+      // Final `done` event: this is the documented contract that lets the chat
+      // thinking panel close/clear itself after a stop. It must be emitted
+      // AFTER the stop notice so the panel is already up when it arrives.
       this.emitThinking('done', this.cancelRequested ? 'Stopped by the user' : 'Finished', this.step);
     }
+    this.cancelRequested = false;
   }
 
   /**
@@ -908,9 +1044,25 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       this.emitThinking('tool', `Waiting for approval: ${title} ${condenseText(this.planTarget(plan, args), 80)}`, this.step);
       const approved = await this.requestPermission(card, plan);
       if (!approved) {
+        if (this.cancelRequested) {
+          // Resolved by a stop, not by the user: the card already shows
+          // "cancelled", so don't overwrite it with "rejected".
+          card.setState('cancelled');
+          return 'Cancelled by the user.';
+        }
         card.setState('rejected');
         this.emitThinking('tool', `${title} rejected by the user`, this.step);
         return 'The user rejected this action. Do not repeat it — adapt your approach or ask the user what they would prefer.';
+      }
+
+      // A stop may land between the approval and the write. File writes are
+      // NOT interrupted once started: writeFile is a single atomic IPC to the
+      // main process, so the file is always written in full or not at all —
+      // never truncated. We only skip writes that have not begun yet, which is
+      // what the cancelRequested check below does.
+      if (this.cancelRequested) {
+        card.setState('cancelled');
+        return 'Cancelled by the user — nothing was applied.';
       }
 
       if (plan.kind === 'edit') {
@@ -1719,14 +1871,27 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     return new Promise((resolve) => {
       let settled = false;
       let timer = null;
-      const finish = (ok, allowAll) => {
+      /**
+       * @param {boolean} ok        approved?
+       * @param {boolean} allowAll  remember the choice for this session
+       * @param {boolean} cancelled resolved because the user pressed Stop
+       */
+      const finish = (ok, allowAll, cancelled) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (this._timers.delete(timer)) clearTimeout(timer);
+        this._pendingApprovals.delete(finish);
         if (allowAll) this.sessionAllow.add(category);
+        if (cancelled) {
+          // Never leave a dead approval card hanging in the chat.
+          try { card.setState('cancelled'); } catch (e) { /* card detached */ }
+        }
         card.closeDiff();
         resolve(ok);
       };
+      // A stop can reach this promise at any time before the user clicks.
+      this._pendingApprovals.add(finish);
 
       // Auto-open the diff proposal for file edits (VS Code / Cursor style)
       if (plan.kind === 'edit') {
@@ -1743,8 +1908,9 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
         { label: 'Allow all in this session', cls: 'allow', onClick: () => finish(true, true) }
       ]);
 
-      const timer2 = setTimeout(() => finish(false, false), 5 * 60 * 1000); // 5 min
-      timer = timer2;
+      // 5-minute approval timeout. Registered as an agent-owned timer so a stop
+      // clears it instead of leaving it pending forever.
+      timer = this.setTimer(() => finish(false, false), 5 * 60 * 1000);
     });
   }
 
@@ -1757,6 +1923,13 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
       const dir = plan.path.slice(0, lastSlash);
       await window.electronAPI.createDirectory(dir).catch(() => {});
     }
+    // Stop semantics for an in-flight write: we deliberately do NOT race the
+    // stop against this await. writeFile hands the full content to the main
+    // process in one IPC, so it either completes (whole file on disk, tracked
+    // for revert) or never starts (skipped by the cancelRequested check in
+    // executeToolCall). A half-written file is therefore impossible; the only
+    // observable effect of stopping mid-write is that the write completes and
+    // stays in the Revert list.
     await window.electronAPI.writeFile(plan.path, plan.updated);
 
     // Sync an open editor tab (keep it clean — disk == buffer)
@@ -2094,7 +2267,8 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
         const labels = {
           pending: '…', running: 'working…', done: '✓ done',
           deleted: '🗑 deleted', moved: '📦 moved',
-          error: '✗ error', rejected: '✕ rejected', awaiting: 'awaiting approval'
+          error: '✗ error', rejected: '✕ rejected', awaiting: 'awaiting approval',
+          cancelled: '⏹ cancelled'
         };
         badge.textContent = labels[state] || state;
         if (text) {
@@ -2107,7 +2281,8 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
           detail.appendChild(pre);
           if (window.ai) window.ai.scrollToBottom();
         }
-        if (state === 'done' || state === 'deleted' || state === 'moved' || state === 'error' || state === 'rejected') {
+        if (state === 'done' || state === 'deleted' || state === 'moved' || state === 'error' ||
+          state === 'rejected' || state === 'cancelled') {
           actions.classList.add('hidden');
         }
       },
@@ -2231,10 +2406,13 @@ Respond in the user's language, but keep code, paths and identifiers exactly as 
     `;
     container.appendChild(el);
     if (window.ai) window.ai.scrollToBottom();
+    // Tracked so requestStop() can remove every live placeholder at once.
+    this._thinkingNodes.add(el);
     return el;
   }
 
   removeNode(el) {
+    if (el) this._thinkingNodes.delete(el);
     if (el && el.parentNode) el.parentNode.removeChild(el);
   }
 

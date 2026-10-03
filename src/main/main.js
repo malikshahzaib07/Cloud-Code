@@ -787,6 +787,80 @@ ipcMain.handle('ai:listModels', async () => {
 });
 
 let currentAiRequest = null;
+let currentAiThinkState = { emit: '', buffering: false, pending: '' };
+
+/**
+ * Stateful filter for streamed content. Reasoning models interleave
+ * `<think>…</think>` with the answer; because the tags can be split across SSE
+ * chunks we buffer the region between an opening and a closing tag.
+ * Returns `{ emit, buffering }` — `emit` is the text safe to forward.
+ */
+function filterStreamedReasoning(state, chunk) {
+  const prev = state || { buffering: false, pending: '' };
+  let buffering = !!prev.buffering;
+  let pending = prev.pending || '';
+
+  const OPEN = /<\s*(think|thinking)\s*>|<\|\s*(begin_of_thought|thinking)\s*\|>/i;
+  const CLOSE = /<\s*\/\s*(think|thinking)\s*>|<\|\s*(end_of_thought|\/thinking)\s*\|>/i;
+  // Fragments that could still grow into one of the tags above.
+  const TAG_CANDIDATES = [
+    '<think>', '<think>', '</think>', '</thinking>',
+    '<|begin_of_thought|>', '<|end_of_thought|>', '<|thinking|>', '<|/thinking|>'
+  ];
+  const couldStartTag = (s) => {
+    if (!s || s[0] !== '<' || s.indexOf('>') !== -1) return false;
+    const lower = s.toLowerCase();
+    return TAG_CANDIDATES.some((c) => c.toLowerCase().startsWith(lower));
+  };
+
+  let text = pending + String(chunk || '');
+  pending = '';
+  let out = '';
+  let guard = 0;
+
+  // Only treat an opening tag as reasoning when it opens the message or sits on
+  // its own line — otherwise ordinary prose like "use <thinking> tags" is eaten.
+  const looksLikeReasoningStart = (t, index) => {
+    if (index === 0) return true;
+    const closeIdx = t.indexOf('>', index);
+    const after = closeIdx === -1 ? '' : t[closeIdx + 1];
+    return t[index - 1] === '\n' || after === '\n';
+  };
+
+  while (guard++ < 40) {
+    if (buffering) {
+      const m = text.match(CLOSE);
+      if (!m) {
+        pending = text.slice(-24);
+        return { emit: out, buffering: true, pending };
+      }
+      text = text.slice(m.index + m[0].length);
+      buffering = false;
+      continue;
+    }
+
+    const open = text.match(OPEN);
+    if (open && looksLikeReasoningStart(text, open.index)) {
+      out += text.slice(0, open.index);
+      text = text.slice(open.index + open[0].length);
+      buffering = true;
+      continue;
+    }
+
+    // A tag split across SSE chunks: hold back the possible fragment.
+    const tail = text.match(/<[^>]*$/);
+    if (tail && couldStartTag(tail[0])) {
+      out += text.slice(0, tail.index);
+      pending = tail[0];
+      break;
+    }
+
+    out += text;
+    break;
+  }
+
+  return { emit: out, buffering, pending };
+}
 
 ipcMain.on('ai:chatStream', (event, payload) => {
   try {
@@ -843,9 +917,15 @@ ipcMain.on('ai:chatStream', (event, payload) => {
             const jsonStr = trimmed.slice(6);
             try {
               const data = JSON.parse(jsonStr);
-              const content = data.choices?.[0]?.delta?.content;
+              const delta = data.choices && data.choices[0] && data.choices[0].delta;
+              const content = delta && delta.content;
               if (content) {
-                event.sender.send('ai:chunk', content);
+                // Streamed chain-of-thought arrives mixed into content; hold it
+                // back and drop it instead of printing raw <think> blocks.
+                currentAiThinkState = filterStreamedReasoning(currentAiThinkState, content);
+                if (currentAiThinkState.emit) {
+                  event.sender.send('ai:chunk', currentAiThinkState.emit);
+                }
               }
             } catch (err) {
               // Ignore non-json chunk lines
@@ -868,6 +948,7 @@ ipcMain.on('ai:chatStream', (event, payload) => {
     req.write(postBody);
     req.end();
     currentAiRequest = req;
+    currentAiThinkState = { emit: '', buffering: false, pending: '' };
   } catch (err) {
     event.sender.send('ai:error', err.message);
   }
@@ -1127,6 +1208,25 @@ ipcMain.handle('shell:run', async (event, opts = {}) => {
 // ---------------------------------------------------------------------------
 const onceRequests = new Map();
 
+/**
+ * Reasoning models (DeepSeek-R, Qwen thinking variants) often emit their
+ * chain-of-thought INSIDE the content field, wrapped in think tags. Left in
+ * place it hides the tool block from the text protocol, so the agent looks
+ * like it stopped responding. Strip the wrappers and keep the text.
+ */
+function stripReasoningWrappers(text) {
+  if (typeof text !== 'string' || !text) return text;
+  let out = text;
+  // Paired blocks first.
+  out = out.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
+  out = out.replace(/<\|begin_of_thought\|>[\s\S]*?<\|end_of_thought\|>/gi, '');
+  out = out.replace(/<\|thinking\|>[\s\S]*?<\|\/thinking\|>/gi, '');
+  // Unterminated opening tag (truncated response): drop the rest.
+  out = out.replace(/<think(?:ing)?>[\s\S]*$/i, '');
+  out = out.replace(/<\|begin_of_thought\|>[\s\S]*$/i, '');
+  return out.replace(/^\s*<\/?think(?:ing)?>\s*/i, '').trim();
+}
+
 function requestChatOnce(id, payload, includeTools) {
   return new Promise((resolve) => {
     try {
@@ -1163,7 +1263,10 @@ function requestChatOnce(id, payload, includeTools) {
             resolve({
               id,
               error: `HTTP ${res.statusCode}: ${body.slice(0, 600)}`,
-              toolsRejected: includeTools && res.statusCode === 400
+              toolsRejected: includeTools && res.statusCode === 400,
+              kind: 'http',
+              // 5xx and rate limiting are worth one more try; a 4xx is not.
+              retryable: res.statusCode >= 500 || res.statusCode === 429
             });
             return;
           }
@@ -1175,11 +1278,18 @@ function requestChatOnce(id, payload, includeTools) {
             // Some local models stream their chain-of-thought in a separate
             // field. Keep it apart from the answer so the renderer can hide it
             // when the user set "Think: Off".
-            const reasoning = String(
+            let reasoning = String(
               msg.reasoning_content || msg.reasoning || msg.thinking || ''
             );
             const toolCalls = [];
             let usedNativeTools = false;
+
+            // Recover the answer when the model wrapped its thinking in content.
+            const cleaned = stripReasoningWrappers(content);
+            if (cleaned && cleaned !== content) {
+              reasoning = (reasoning + (reasoning ? '\n' : '') + content).trim() || reasoning;
+              content = cleaned;
+            }
 
             if (Array.isArray(msg.tool_calls)) {
               for (const tc of msg.tool_calls) {
@@ -1238,7 +1348,7 @@ function requestChatOnce(id, payload, includeTools) {
 
       req.on('error', (err) => {
         onceRequests.delete(id);
-        resolve({ id, error: err.message, toolsRejected: false });
+        resolve({ id, error: err.message, toolsRejected: false, kind: 'transport', retryable: true });
       });
       req.on('timeout', () => {
         req.destroy(new Error('AI request timed out (180s)'));
@@ -1248,7 +1358,7 @@ function requestChatOnce(id, payload, includeTools) {
       req.write(postBody);
       req.end();
     } catch (err) {
-      resolve({ id, error: err.message });
+      resolve({ id, error: err.message, kind: 'transport', retryable: true });
     }
   });
 }
@@ -1263,6 +1373,19 @@ ipcMain.handle('ai:chatOnce', async (event, payload) => {
     result = await requestChatOnce(id, { ...payload, tools: null }, false);
     if (!result.error) result.toolsRejected = true;
   }
+
+  // Transient failures (network blip, 5xx, rate limit, timeout) — retry with a
+  // short backoff so a transient hiccup does not look like "model is dead".
+  const MAX_RETRIES = 2;
+  for (let attempt = 0; attempt < MAX_RETRIES && result.error && result.retryable; attempt++) {
+    const delay = attempt === 0 ? 400 : 1200;
+    await new Promise((r) => setTimeout(r, delay));
+    result = await requestChatOnce(id + `_r${attempt}`, payload, true);
+    if (result.error && result.toolsRejected) {
+      result = await requestChatOnce(id + `_r${attempt}`, { ...payload, tools: null }, false);
+    }
+  }
+
   return result;
 });
 

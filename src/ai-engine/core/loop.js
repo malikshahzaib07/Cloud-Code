@@ -22,8 +22,49 @@
     throw new Error('Cloud AI engine: core/protocol.js must be loaded before core/loop.js');
   }
 
-  /** Event types the host may render. */
-  const EVENT_TYPES = ['step', 'tool_start', 'tool_end', 'tool_error', 'assistant', 'notice', 'done', 'error'];
+  /**
+   * Event types the host may render. The first eight are the original contract
+   * and must not be renamed or removed; `retry` and `health` were added for
+   * transient-failure resilience.
+   */
+  const EVENT_TYPES = [
+    'step', 'tool_start', 'tool_end', 'tool_error',
+    'assistant', 'notice', 'done', 'error',
+    'retry', 'health'
+  ];
+
+  /** Retry budget and backoff schedule for transient transport failures. */
+  const RETRY_DELAYS_MS = [400, 1200];
+
+  /** Maximum protocol nudges injected for a model that keeps answering in prose. */
+  const MAX_NUDGES = 2;
+
+  /** Error shapes that are worth retrying: network, timeout, 5xx, 429. */
+  const TRANSIENT_RE = /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|socket hang up|network|fetch failed|timeout|timed out|temporarily unavailable|service unavailable|bad gateway|gateway timeout|overloaded|\b429\b|\b500\b|\b502\b|\b503\b|\b504\b)/i;
+
+  /** Classify a failure so the host can offer "retry" / "switch model". */
+  function classifyError(message, aborted) {
+    const msg = String(message == null ? '' : message);
+    if (aborted) return { kind: 'cancelled', message: msg, retryable: false };
+    if (/abort|destroy|cancel/i.test(msg) && !TRANSIENT_RE.test(msg)) {
+      return { kind: 'cancelled', message: msg, retryable: false };
+    }
+    if (/\b(4\d\d)\b/.test(msg) && !TRANSIENT_RE.test(msg)) {
+      return { kind: 'http', message: msg, retryable: false };
+    }
+    if (TRANSIENT_RE.test(msg)) return { kind: 'transport', message: msg, retryable: true };
+    if (/^\s*(HTTP|status)/i.test(msg)) return { kind: 'http', message: msg, retryable: false };
+    return { kind: 'protocol', message: msg, retryable: false };
+  }
+
+  function sleep(ms, signal) {
+    return new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      if (signal && typeof signal.addEventListener === 'function') {
+        signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+      }
+    });
+  }
 
   class AgentLoop {
     /**
@@ -33,6 +74,11 @@
      *        { content, toolCalls, usedNativeTools, reasoning, finishReason, error }
      * @param {function} o.executeTool async (toolCall) => Promise<string>
      * @param {function} [o.onEvent]   (evt) => void, evt.type ∈ EVENT_TYPES
+     * @param {object}  [o.host]       { nudgeOnSilentTurns } — set
+     *        `nudgeOnSilentTurns: true` to let the loop correct a model that
+     *        answers in prose while a tool was clearly needed.
+     * @param {boolean} [o.requireToolFirstStep=false] — treat a first turn with
+     *        no tool call as a protocol failure and correct it.
      */
     constructor(o) {
       const opts = o || {};
@@ -40,9 +86,16 @@
       this.callModel = opts.callModel;
       this.executeTool = opts.executeTool;
       this.onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : null;
+      const host = opts.host || {};
+      this.nudgeOnSilentTurns = host.nudgeOnSilentTurns === undefined
+        ? false
+        : !!host.nudgeOnSilentTurns;
+      this.requireToolFirstStep = !!opts.requireToolFirstStep;
+      this.retryDelaysMs = Array.isArray(opts.retryDelaysMs) ? opts.retryDelaysMs.slice() : RETRY_DELAYS_MS.slice();
       this.messages = [];
       this.step = 0;
       this.running = false;
+      this.lastError = null;
       this._controller = null;
     }
 
@@ -95,6 +148,10 @@
       let stopReason = 'done';
       let error = null;
       let useNativeTools = true;
+      let nudges = 0;
+      let retriesUsed = 0;
+      this.lastError = null;
+      this._toolsAlreadyUsed = false;
 
       try {
         for (;;) {
@@ -111,30 +168,55 @@
           this._emit({ type: 'step', step: this.step, maxSteps: this.maxSteps });
 
           let res;
-          try {
-            res = await this.callModel(this.messages, {
-              signal,
-              useNativeTools,
-              step: this.step
+          // --- transient-failure retry with backoff --------------------------
+          for (;;) {
+            try {
+              res = await this.callModel(this.messages, { signal, useNativeTools, step: this.step });
+            } catch (err) {
+              res = { error: err && err.message ? err.message : String(err), __thrown: true };
+            }
+            if (!res) break;
+            if (!res.error) break;
+            if (this._aborted(signal)) break;
+
+            const info = classifyError(res.error, false);
+            if (!info.retryable || retriesUsed >= this.retryDelaysMs.length) break;
+
+            const delay = this.retryDelaysMs[retriesUsed];
+            retriesUsed += 1;
+            this._emit({
+              type: 'retry',
+              step: this.step,
+              attempt: retriesUsed,
+              maxAttempts: this.retryDelaysMs.length + 1,
+              delayMs: delay,
+              kind: info.kind,
+              message: info.message,
+              retryable: true
             });
-          } catch (err) {
-            if (this._aborted(signal)) { stopReason = 'cancelled'; break; }
-            error = err && err.message ? err.message : String(err);
-            this._emit({ type: 'error', message: error, step: this.step });
-            stopReason = 'model_error';
-            break;
+            await sleep(delay, signal);
+            if (this._aborted(signal)) { res = null; break; }
           }
 
           if (this._aborted(signal)) { stopReason = 'cancelled'; break; }
-          if (!res) { stopReason = 'empty_response'; break; }
+
+          if (!res) { stopReason = res === null ? 'cancelled' : 'empty_response'; break; }
 
           if (res.error) {
             error = String(res.error);
-            if (/cancel|destroy|socket|ECONNRESET|timed out/i.test(error) && this._aborted(signal)) {
-              stopReason = 'cancelled';
-              break;
-            }
-            this._emit({ type: 'error', message: error, step: this.step });
+            const info = classifyError(error, this._aborted(signal));
+            this.lastError = info;
+            if (info.kind === 'cancelled') { stopReason = 'cancelled'; break; }
+            this._emit({ type: 'error', kind: info.kind, message: error, retryable: info.retryable, step: this.step });
+            this._emit({
+              type: 'health',
+              step: this.step,
+              ok: false,
+              kind: info.kind,
+              message: error,
+              retryable: info.retryable,
+              retriesUsed
+            });
             stopReason = 'model_error';
             break;
           }
@@ -174,6 +256,47 @@
 
           if (toolCalls.length === 0) {
             const clean = protocol().stripAsciiDecoration(content);
+            // A "silent turn" is prose where a tool was clearly needed:
+            //   nudgeOnSilentTurns  → a tool has already run, then the model chats
+            //   requireToolFirstStep → the model chats before any tool has run
+            const silentTurn = this.nudgeOnSilentTurns
+              ? this._toolsAlreadyUsed
+              : (this.requireToolFirstStep && !this._toolsAlreadyUsed);
+
+            if (silentTurn && nudges < MAX_NUDGES) {
+              // The model answered in prose where a tool was clearly needed.
+              // Correct it once or twice with the exact block shape, then continue.
+              nudges += 1;
+              this.messages.push({ role: 'assistant', content: clean || '(no response)' });
+              const correction =
+                'Your last message was prose. No tool was called, so nothing happened on disk. ' +
+                'Reply with EXACTLY one block and nothing else:\n' +
+                '<<<TOOL>>>\n{"name":"list_dir","args":{"path":"."}}\n<<<END>>>\n' +
+                'No explanation, no markdown fence, no trailing comma, double-quoted keys. ' +
+                '(Correction ' + nudges + ' of ' + MAX_NUDGES + '.)';
+              this.messages.push({ role: 'user', content: correction });
+              this._emit({
+                type: 'notice',
+                text: 'The model answered without calling a tool — asking it to emit the tool block (attempt ' + nudges + ' of ' + MAX_NUDGES + ').',
+                step: this.step,
+                phase: 'protocol-nudge'
+              });
+              continue;
+            }
+
+            if (silentTurn) {
+              // Out of nudges: stop gracefully with an explicit final message.
+              const msg = 'The model did not use any tool after ' + MAX_NUDGES +
+                ' correction attempts, so no files were changed.';
+              finalText = clean ? clean + '\n\n' + msg : msg;
+              this.messages.push({ role: 'assistant', content: clean || '(no response)' });
+              this._emit({ type: 'assistant', content: finalText, reasoning, step: this.step });
+              this.lastError = { kind: 'protocol', message: msg, retryable: false };
+              this._emit({ type: 'error', kind: 'protocol', message: msg, retryable: false, step: this.step });
+              stopReason = 'no_tool_call';
+              break;
+            }
+
             finalText = clean;
             this.messages.push({ role: 'assistant', content: clean || '(no response)' });
             this._emit({ type: 'assistant', content: clean || '(no response)', reasoning, step: this.step });
@@ -181,6 +304,7 @@
             break;
           }
 
+          this._toolsAlreadyUsed = true;
           if (content) this._emit({ type: 'notice', content, reasoning, step: this.step, phase: 'thinking' });
 
           this.messages.push(protocol().formatAssistantTurn({ content, toolCalls, usedNativeTools }));
@@ -221,7 +345,10 @@
         cancelled: stopReason === 'cancelled',
         finalText,
         messages: this.messages,
-        error
+        error,
+        lastError: this.lastError,
+        nudges,
+        retries: retriesUsed
       };
       this._emit({ type: 'done', result });
       return result;
@@ -233,7 +360,7 @@
     }
   }
 
-  const api = { AgentLoop, EVENT_TYPES };
+  const api = { AgentLoop, EVENT_TYPES, RETRY_DELAYS_MS, MAX_NUDGES, classifyError };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.CloudAI = Object.assign(global.CloudAI || {}, { AgentLoop, loop: api });

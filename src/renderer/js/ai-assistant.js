@@ -14,6 +14,19 @@ const CHAT_INPUT_LINE_FALLBACK = 18;   // px, when the UA gives us no line-heigh
 // How close to the bottom counts as "the user is following along" (px).
 const CHAT_STICK_GAP = 64;
 
+// --------------------------------------------------------------------------
+// Send-button reliability.
+//   STREAM_WATCHDOG_MS — no chunk for this long ⇒ the stream is considered
+//     over and the UI is force-restored to idle. This is the last line of
+//     defence against a lost `ai:end` / `ai:error` leaving the button stuck.
+//   SEND_LOCK_MS — how long a click is ignored while a send/stop transition is
+//     still in flight (guards double sends).
+//   BUSY_POLL_MS — light poll of `window.agent.running` while a task is active.
+// --------------------------------------------------------------------------
+const STREAM_WATCHDOG_MS = 10000;
+const SEND_LOCK_MS = 1500;
+const BUSY_POLL_MS = 400;
+
 // Empty-state capabilities. Each one is a clickable starter prompt.
 const CHAT_STARTERS = [
   { icon: '📄', label: 'Create files', text: 'Create a new file src/utils/debounce.js with a small debounce helper and JSDoc comments for each parameter.' },
@@ -24,6 +37,21 @@ const CHAT_STARTERS = [
 ];
 
 class AIAssistant {
+  // A markdown horizontal rule: 3+ of `-`, `*` or `_` (optionally spaced).
+  static get HR_TEST() { return /^[-*_][ \t]*(?:[-*_][ \t]*){2,}$/; }
+
+  // Local stand-in for the engine's `isDecorativeLine` (used when
+  // `window.CloudAI.protocol` is unavailable, e.g. a bare preview).
+  static LOCAL_DECOR_TEST(t) {
+    if (!t) return false;
+    if (/^\+[-+|=]*\+$/.test(t)) return true;                       // +---+---+
+    if (/^[●◆▪▫◻◼■□▶►➤•·*]+$/u.test(t)) return true;               // bullet runs
+    if (/[─-╿▀-▟■-◿]/.test(t)) return true;                        // box drawing
+    if (/^[^\n]*?[%0-9A-Za-z ,.:()\-+#]{0,12}\s*[▁-▟░-▓■-◿]{2,}[^\n]*$/u.test(t)) return true;
+    if (/^!-\/:-\@\[-`\{-~]{4,}$/.test(t)) return true;             // ASCII art line
+    return false;
+  }
+
   constructor(messagesId, inputId, sendBtnId) {
     this.messagesContainer = document.getElementById(messagesId);
     this.input = document.getElementById(inputId);
@@ -49,6 +77,19 @@ class AIAssistant {
     // Scroll stickiness: true while the user is reading the tail.
     this._stick = true;
 
+    // ---- Send-button state machine --------------------------------------
+    // `idle` | `streaming` | `agent`. `syncSendState()` is the ONLY writer of
+    // the button's visuals/disabled flag; every other entry point funnels
+    // into it.
+    this.sendState = 'idle';
+    // Legacy "in flight" hint pushed in by agent.js via setSendButtonState().
+    this._legacyBusy = false;
+    // True while a click is being processed (double-click / Enter+click guard).
+    this._sendLock = false;
+    this._sendLockTimer = null;
+    this._watchdogTimer = null;
+    this._busyPollTimer = null;
+
     // @mention popup state
     this.mentionItems = [];
     this.mentionIdx = 0;
@@ -62,7 +103,13 @@ class AIAssistant {
   }
 
   init() {
-    this.sendBtn.onclick = () => this.handleSend();
+    // Robust click path: a stale `disabled` (or a click that arrives while the
+    // previous transition is still settling) must never swallow a send.
+    this.sendBtn.onclick = () => this.onSendButtonClick();
+    // Native clicks also cover Enter/Space activation on the focused button.
+    if (this.sendBtn.addEventListener) {
+      this.sendBtn.addEventListener('pointerdown', () => this.syncSendState());
+    }
     this.input.addEventListener('keydown', (e) => this.onInputKeydown(e));
 
     // Chat / Agent mode toggle
@@ -74,7 +121,16 @@ class AIAssistant {
     this.input.addEventListener('input', () => {
       this.autoGrowInput();
       this.updateMentions();
+      this.syncSendState();
     });
+    // `input` covers typing/paste/undo; these two catch the rest so the button
+    // can never stay greyed out while the textarea holds text.
+    if (this.input.addEventListener) {
+      this.input.addEventListener('beforeinput', () => this.syncSendState());
+      this.input.addEventListener('paste', () => setTimeout(() => this.syncSendState(), 0));
+      this.input.addEventListener('keyup', () => this.syncSendState());
+      this.input.addEventListener('focus', () => this.syncSendState());
+    }
     this.input.addEventListener('blur', () => setTimeout(() => this.hideMentions(), 150));
     this.input.addEventListener('click', () => this.updateMentions());
 
@@ -139,13 +195,27 @@ class AIAssistant {
       const originalReset = agent.reset.bind(agent);
       agent.reset = (silent) => {
         this.thinkPanel.destroy();
+        this.syncSendState();
         return originalReset(silent);
       };
+    }
+
+    // Re-evaluate the button whenever anything outside this class could have
+    // changed the world (agent run start/stop, mode switch, window refocus).
+    window.addEventListener('agent:mode-changed', () => this.syncSendState());
+    window.addEventListener('chat:mode-changed', () => this.syncSendState());
+    window.addEventListener('focus', () => this.syncSendState());
+    if (document.addEventListener) {
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) this.syncSendState();
+      });
     }
 
     // IPC Streaming Listeners (chat mode)
     if (window.electronAPI) {
       window.electronAPI.onAiChunk((chunk) => {
+        // Any chunk proves the stream is alive — re-arm the watchdog.
+        this.touchStreamWatchdog();
         if (!this.currentResponseNode) return;
         this.currentResponseText += chunk;
         this.updateResponseDisplay(this.currentResponseNode, this.currentResponseText);
@@ -153,24 +223,11 @@ class AIAssistant {
       });
 
       window.electronAPI.onAiEnd(() => {
-        this.isStreaming = false;
-        this.setSendButtonState(false);
-        if (this.currentResponseNode) {
-          this.finalizeResponseDisplay(this.currentResponseNode, this.currentResponseText);
-          this.history.push({ role: 'assistant', content: this.currentResponseText });
-        }
-        this.currentResponseNode = null;
-        this.currentResponseText = '';
+        this.finalizeStream('end');
       });
 
       window.electronAPI.onAiError((err) => {
-        this.isStreaming = false;
-        this.setSendButtonState(false);
-        if (this.currentResponseNode) {
-          this.markError(this.currentResponseNode, err);
-        }
-        this.currentResponseNode = null;
-        this.currentResponseText = '';
+        this.finalizeStream('error', err);
       });
     }
 
@@ -185,8 +242,7 @@ class AIAssistant {
 
     this.setMode('chat');
     this.autoGrowInput();
-    this.updateSendEnabled();
-    this.setBusyState(false);
+    this.syncSendState();
     this.renderWelcome();
   }
 
@@ -225,42 +281,217 @@ class AIAssistant {
     }
   }
 
-  // While a request is in flight: dim the input, show a progress hint and make
-  // the button read unmistakably as "Stop".
-  setBusyState(on, label) {
-    this.busy = !!on;
-    if (this.busyEl) {
-      this.busyEl.hidden = !on;
-      const text = this.busyEl.querySelector('.chat-busy-text');
-      if (text) text.textContent = label || (this.mode === 'agent'
-        ? 'Agent is working — press Stop to interrupt'
-        : 'Thinking… press Stop to cancel');
-    }
-    if (this.inputBox && this.inputBox.classList) {
-      this.inputBox.classList.toggle('chat-busy', !!on);
-    }
-    if (this.footerEl && this.footerEl.classList) {
-      this.footerEl.classList.toggle('chat-footer-busy', !!on);
-    }
-    if (this.hintEl && this.hintEl.classList) {
-      this.hintEl.classList.toggle('chat-hint-muted', !!on);
-    }
-    if (this.sendBtn && this.sendBtn.setAttribute) {
-      this.sendBtn.setAttribute('aria-busy', on ? 'true' : 'false');
-      this.sendBtn.classList.toggle('chat-stop', !!on);
-    }
-    this.updateSendEnabled();
+  // ==========================================================================
+  // Send-button state machine
+  //
+  //   idle       → Send; enabled iff the textarea has non-whitespace text.
+  //   streaming  → Stop (chat stream); enabled ALWAYS (it must never be a dead
+  //                button while work is in flight).
+  //   agent      → Stop (agent run); enabled ALWAYS.
+  //
+  // `syncSendState()` is the single authority for `disabled`, the glyph, the
+  // title and the busy chrome. Every event that can change the answer calls it.
+  // ==========================================================================
+
+  agentRunning() {
+    return !!(window.agent && window.agent.running);
   }
 
-  // Send is only offered when there is something to send (and never while a
-  // request is running — the button is a Stop button then).
+  hasInputText() {
+    return !!(this.input && String(this.input.value == null ? '' : this.input.value).trim());
+  }
+
+  sendStateFor() {
+    if (this.isStreaming) return 'streaming';
+    if (this.agentRunning() || this._legacyBusy) return 'agent';
+    return 'idle';
+  }
+
+  // The only writer of the button's state. Idempotent and cheap — safe to call
+  // from every input/pointer/event handler and from the poll.
+  syncSendState() {
+    const state = this.sendStateFor();
+    const busy = state !== 'idle';
+    this.sendState = state;
+    this.busy = busy;
+
+    // --- busy chrome (dimmed input + progress hint) ---
+    if (this.busyEl) {
+      this.busyEl.hidden = !busy;
+      const text = this.busyEl.querySelector('.chat-busy-text');
+      if (text) {
+        text.textContent = state === 'agent'
+          ? 'Agent is working — press Stop to interrupt'
+          : 'Thinking… press Stop to cancel';
+      }
+    }
+    if (this.inputBox && this.inputBox.classList) this.inputBox.classList.toggle('chat-busy', busy);
+    if (this.footerEl && this.footerEl.classList) this.footerEl.classList.toggle('chat-footer-busy', busy);
+    if (this.hintEl && this.hintEl.classList) this.hintEl.classList.toggle('chat-hint-muted', busy);
+
+    const btn = this.sendBtn;
+    if (!btn) {
+      this._syncBusyPoll();
+      return;
+    }
+
+    if (btn.setAttribute) btn.setAttribute('aria-busy', busy ? 'true' : 'false');
+    if (btn.dataset) btn.dataset.sendState = state;
+    if (btn.classList) {
+      btn.classList.toggle('chat-stop', busy);
+      btn.classList.toggle('chat-sending', busy);
+      btn.classList.toggle('chat-send-idle', !busy);
+    }
+
+    if (this._btnState !== state) {
+      this._btnState = state;
+      if (state === 'idle') {
+        btn.innerHTML = `
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+            <path d="M15.854.146a.5.5 0 0 1 .11.54l-5.8 14.5a.5.5 0 0 1-.928.008L6.471 9.53 1.006 6.764a.5.5 0 0 1 .008-.928L15.514.036a.5.5 0 0 1 .34.11z"/>
+          </svg>
+        `;
+        btn.title = 'Send (Enter)';
+        btn.style.background = 'var(--accent-color)';
+      } else {
+        btn.innerHTML = '⏹';
+        btn.title = state === 'agent' ? 'Stop the agent' : 'Stop generating';
+        btn.style.background = '#e53e3e';
+      }
+    }
+
+    // Stop must never be disabled; Send is enabled exactly when there is text.
+    // This single line is the fix for "button stuck greyed out but Enter works".
+    btn.disabled = busy ? false : !this.hasInputText();
+
+    this._syncBusyPoll();
+  }
+
+  // Clears a stale `disabled` immediately (used when a click finds nothing to
+  // send — the button must never be left in a state that looks stuck).
+  forceSendEnabled() {
+    if (this.sendBtn) this.sendBtn.disabled = false;
+    this.syncSendState();
+  }
+
+  // Light poll of the agent's running flag, only while a task is active.
+  _syncBusyPoll() {
+    const want = this.busy || !!this.currentResponseNode || this._legacyBusy;
+    if (want && !this._busyPollTimer) {
+      this._busyPollTimer = setInterval(() => {
+        if (this.mode === 'agent' || this._legacyBusy || this.isStreaming) this.syncSendState();
+        else this._stopBusyPoll();
+      }, BUSY_POLL_MS);
+    } else if (!want && this._busyPollTimer) {
+      this._stopBusyPoll();
+    }
+  }
+
+  _stopBusyPoll() {
+    if (this._busyPollTimer) { clearInterval(this._busyPollTimer); this._busyPollTimer = null; }
+  }
+
+  // --------------------------------------------------------------------------
+  // Click handling + transition lock
+  // --------------------------------------------------------------------------
+
+  beginSendLock(ms) {
+    this._sendLock = true;
+    if (this._sendLockTimer) clearTimeout(this._sendLockTimer);
+    this._sendLockTimer = setTimeout(() => { this.endSendLock(); }, ms || SEND_LOCK_MS);
+  }
+
+  endSendLock() {
+    this._sendLock = false;
+    if (this._sendLockTimer) { clearTimeout(this._sendLockTimer); this._sendLockTimer = null; }
+  }
+
+  onSendButtonClick() {
+    const state = this.sendStateFor();
+
+    if (state !== 'idle') {
+      // Busy ⇒ this is a Stop click, whatever the button looks like. Stop is
+      // never blocked by the send lock: interrupting must always work.
+      try { this.handleSend(); } finally { this.syncSendState(); }
+      return;
+    }
+
+    // A send transition is still in flight — ignore the click rather than
+    // dispatching the same message twice.
+    if (this._sendLock) { this.syncSendState(); return; }
+
+    // Idle. If there is nothing to send, do not swallow the click silently:
+    // clear the stale disabled state and re-evaluate.
+    if (!this.hasInputText()) {
+      this.endSendLock();
+      this.forceSendEnabled();
+      if (this.input && this.input.focus) this.input.focus();
+      return;
+    }
+    this.beginSendLock();
+    try { this.handleSend(); } finally { this.syncSendState(); }
+  }
+
+  // --------------------------------------------------------------------------
+  // Stream lifecycle: watchdog + one finaliser for end/error/watchdog.
+  // --------------------------------------------------------------------------
+
+  touchStreamWatchdog() {
+    if (this._watchdogTimer) clearTimeout(this._watchdogTimer);
+    this._watchdogTimer = setTimeout(() => this.finalizeStream('watchdog'), STREAM_WATCHDOG_MS);
+  }
+
+  clearStreamWatchdog() {
+    if (this._watchdogTimer) { clearTimeout(this._watchdogTimer); this._watchdogTimer = null; }
+  }
+
+  // THE finaliser. Runs on ai:end, ai:error and the watchdog, and always
+  // restores the idle state (the UI can never get stuck busy).
+  finalizeStream(reason, err) {
+    try {
+      this.clearStreamWatchdog();
+      this.isStreaming = false;
+      this._legacyBusy = false;
+      const node = this.currentResponseNode;
+      if (node) {
+        if (reason === 'error') {
+          this.markError(node, err == null ? 'Request failed.' : err);
+        } else {
+          this.finalizeResponseDisplay(node, this.currentResponseText);
+          if (reason !== 'watchdog') {
+            this.history.push({ role: 'assistant', content: this.currentResponseText });
+          }
+        }
+      }
+      this.currentResponseNode = null;
+      this.currentResponseText = '';
+    } catch (e) {
+      // A rendering failure must not strand the busy state either.
+      this.currentResponseNode = null;
+      this.currentResponseText = '';
+    } finally {
+      this.endSendLock();
+      this.syncSendState();
+    }
+  }
+
+  // ---- legacy compat surface (used by agent.js / other callers) -----------
+
+  // While a request is in flight: dim the input, show a progress hint and make
+  // the button read unmistakably as "Stop". Kept for API compatibility; the
+  // real state is owned by `syncSendState()`.
+  setBusyState(on, label) {
+    this.busy = !!on;
+    if (label && this.busyEl) {
+      const text = this.busyEl.querySelector('.chat-busy-text');
+      if (text) text.textContent = label;
+    }
+    this.syncSendState();
+  }
+
+  // Kept as an alias: all button/disabled logic now lives in syncSendState().
   updateSendEnabled() {
-    if (!this.sendBtn) return;
-    const hasText = !!(this.input && String(this.input.value || '').trim());
-    // A running agent owns the Stop button, so never disable it there.
-    const agentRunning = this.mode === 'agent'
-      && !!(window.agent && window.agent.running);
-    this.sendBtn.disabled = !!(this.busy && !agentRunning) || (!hasText && !agentRunning);
+    this.syncSendState();
   }
 
   _inputLineHeight() {
@@ -350,7 +581,7 @@ class AIAssistant {
       // CustomEvent unavailable (plain-browser preview)
     }
     this.syncBusyFromAgent();
-    this.updateSendEnabled();
+    this.syncSendState();
   }
 
   // ==========================================================================
@@ -409,8 +640,7 @@ class AIAssistant {
   // in-flight state so Stop is always obvious.
   syncBusyFromAgent() {
     if (this.mode !== 'agent') return;
-    const running = !!(window.agent && window.agent.running);
-    if (running !== this.busy) this.setBusyState(running);
+    this.syncSendState();
   }
 
   // With thinking off, never surface reasoning-style payloads
@@ -469,12 +699,13 @@ class AIAssistant {
   handleSend() {
     if (this.mode === 'agent') {
       if (window.agent && window.agent.running) {
-        this.setBusyState(false);
+        this.syncSendState();
         window.agent.requestStop();
         return;
       }
       const text = this.input.value.trim();
-      if (!text) return;
+      // Nothing to send: never leave a stale greyed-out button behind.
+      if (!text) { this.forceSendEnabled(); return; }
       this.input.value = '';
       this.afterSend();
       this.dispatch(text);
@@ -485,11 +716,15 @@ class AIAssistant {
       if (window.electronAPI && window.electronAPI.stopAiChatStream) {
         window.electronAPI.stopAiChatStream();
       }
+      // The finaliser owns the state; arm a short fallback in case `ai:end`
+      // never arrives after a manual stop.
+      this.touchStreamWatchdog();
+      this.syncSendState();
       return;
     }
 
     const text = this.input.value.trim();
-    if (!text) return;
+    if (!text) { this.forceSendEnabled(); return; }
     this.input.value = '';
     this.afterSend();
     this.dispatch(text);
@@ -498,7 +733,8 @@ class AIAssistant {
   // The textarea shrinks back to one line once the message is on its way.
   afterSend() {
     this.autoGrowInput();
-    this.updateSendEnabled();
+    this.beginSendLock();
+    this.syncSendState();
   }
 
   sendPromptWithContext(userPrompt) {
@@ -506,7 +742,7 @@ class AIAssistant {
   }
 
   async dispatch(userText) {
-    if (!userText) return;
+    if (!userText) { this.endSendLock(); this.forceSendEnabled(); return; }
 
     // Resolve @file mentions into an attached-context block
     const mention = await this.resolveMentions(userText);
@@ -534,6 +770,11 @@ class AIAssistant {
       if (window.agent && window.agent.handleUserPrompt) {
         window.agent.handleUserPrompt(userText, fullText, preview);
       }
+      // agent.js pushes its own in-flight flag via setSendButtonState(); mirror
+      // it here too so the Stop button appears immediately.
+      this._legacyBusy = !!(window.agent && window.agent.running);
+      this.endSendLock();
+      this.syncSendState();
       return;
     }
 
@@ -618,14 +859,21 @@ class AIAssistant {
     this.scrollToBottom();
 
     this.isStreaming = true;
-    this.setSendButtonState(true);
+    this.syncSendState();
+    // Arm the watchdog BEFORE the IPC call: if `ai:end`/`ai:error` is ever
+    // lost, the UI still comes back on its own.
+    this.touchStreamWatchdog();
 
     const model = this.modelSelect ? this.modelSelect.value : 'qwen-2.5-coder-7b';
 
-    window.electronAPI.startAiChatStream({
-      model: model,
-      messages: this.history
-    });
+    try {
+      window.electronAPI.startAiChatStream({
+        model: model,
+        messages: this.history
+      });
+    } catch (err) {
+      this.finalizeStream('error', err && err.message ? err.message : String(err));
+    }
   }
 
   // ==========================================================================
@@ -1016,7 +1264,60 @@ class AIAssistant {
   renderMarkdown(md) {
     if (md === null || md === undefined) return '';
     const lines = String(md).replace(/\r\n?/g, '\n').split('\n');
-    return this.renderBlocks(lines);
+    return this.renderBlocks(this.stripDecorativeLines(lines));
+  }
+
+  // --------------------------------------------------------------------------
+  // Decoration stripping. Two rules, applied outside fenced code only:
+  //   1. markdown horizontal rules (`---`, `***`, `___`, `───`, `═══`, `+---+`)
+  //      are dropped outright — they used to render as long grey bars with a
+  //      stray glyph and read as noise;
+  //   2. ASCII/box-drawing "art" lines are dropped via the engine's own filter
+  //      (`window.CloudAI.protocol.isDecorativeLine`) with a local fallback.
+  // Fenced code blocks (``` / ~~~) are copied through byte-for-byte: code the
+  // user asked to see, and attached files, must never be mangled.
+  // --------------------------------------------------------------------------
+  isDecorativeLine(line) {
+    const proto = this._protocol();
+    if (proto && typeof proto.isDecorativeLine === 'function') {
+      try { return !!proto.isDecorativeLine(line.trim()); } catch (e) { /* fallback */ }
+    }
+    return AIAssistant.LOCAL_DECOR_TEST(String(line == null ? '' : line).trim());
+  }
+
+  _protocol() {
+    try {
+      const root = window.CloudAI;
+      return root && root.protocol ? root.protocol : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  stripDecorativeLines(lines) {
+    const out = [];
+    let fence = null;      // { marker, len } while inside a fenced code block
+    for (const line of lines) {
+      const f = String(line).match(/^\s{0,3}(```+|~~~+)\s*([^\s`~]*)/);
+      if (fence) {
+        out.push(line);
+        if (f && f[1].charAt(0) === fence.marker && f[1].length >= fence.len) fence = null;
+        continue;
+      }
+      if (f) {
+        fence = { marker: f[1].charAt(0), len: f[1].length };
+        out.push(line);
+        continue;
+      }
+      // Never touch a line that belongs to a real markdown table.
+      if (String(line).indexOf('|') !== -1) { out.push(line); continue; }
+      // 1. horizontal rules → nothing at all.
+      if (AIAssistant.HR_TEST.test(String(line).trim())) continue;
+      // 2. box-drawing / bar art → nothing.
+      if (this.isDecorativeLine(line)) continue;
+      out.push(String(line).replace(/[ \t]+$/, ''));
+    }
+    return out;
   }
 
   renderBlocks(lines) {
@@ -1045,11 +1346,10 @@ class AIAssistant {
       }
 
       // ---- horizontal rule -------------------------------------------------
-      if (/^\s{0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$/.test(line)) {
-        html += '<hr class="msg-hr">';
-        i++;
-        continue;
-      }
+      // Deliberately produces NOTHING: rules are stripped in
+      // `stripDecorativeLines()`, and this guard keeps the renderer from ever
+      // emitting a visible divider bar even if a rule slips past it.
+      if (AIAssistant.HR_TEST.test(line.trim())) { i++; continue; }
 
       // ---- heading ---------------------------------------------------------
       const h = line.match(/^\s{0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$/);
@@ -1107,7 +1407,7 @@ class AIAssistant {
 
   isBlockStart(line) {
     if (/^\s{0,3}(```|~~~)/.test(line)) return true;
-    if (/^\s{0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$/.test(line)) return true;
+    if (AIAssistant.HR_TEST.test(line.trim())) return true;
     if (/^\s{0,3}#{1,6}[ \t]+/.test(line)) return true;
     if (/^\s{0,3}>/.test(line)) return true;
     if (/^\s{0,6}([-*+]|\d+[.)])[ \t]+/.test(line)) return true;
@@ -1278,26 +1578,22 @@ class AIAssistant {
     });
   }
 
+  // Legacy compat entry point (agent.js calls this around an agent run). It is
+  // only a *hint* now: the authoritative state is derived from `isStreaming`,
+  // `window.agent.running` and this flag by `syncSendState()`.
   setSendButtonState(isStreaming) {
-    if (this.sendBtn && this.sendBtn.classList) {
-      this.sendBtn.classList.toggle('chat-sending', !!isStreaming);
-    }
-    // In-flight state (dimmed input + progress hint) rides along with the
-    // button so the two can never disagree.
-    this.setBusyState(!!isStreaming);
-    if (isStreaming) {
-      this.sendBtn.innerHTML = '⏹';
-      this.sendBtn.title = 'Stop generating';
-      this.sendBtn.style.background = '#e53e3e';
+    const on = !!isStreaming;
+    if (on) {
+      this._legacyBusy = true;
+      // An agent run also flips `isStreaming` in agent mode; chat streams own
+      // it via sendChat(). Never downgrade a live chat stream.
+      if (!this.isStreaming && this.mode !== 'agent') this.isStreaming = true;
     } else {
-      this.sendBtn.innerHTML = `
-        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
-          <path d="M15.854.146a.5.5 0 0 1 .11.54l-5.8 14.5a.5.5 0 0 1-.928.008L6.471 9.53 1.006 6.764a.5.5 0 0 1 .008-.928L15.514.036a.5.5 0 0 1 .34.11z"/>
-        </svg>
-      `;
-      this.sendBtn.title = 'Send (Enter)';
-      this.sendBtn.style.background = 'var(--accent-color)';
+      this._legacyBusy = false;
+      this.isStreaming = false;
+      this.endSendLock();
     }
+    this.syncSendState();
   }
 
   escapeHtml(str) {

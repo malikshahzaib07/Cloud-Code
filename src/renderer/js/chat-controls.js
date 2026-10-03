@@ -13,6 +13,15 @@
   var MAX_FILES = 10;
   var MAX_BYTES = 400 * 1024;
 
+  // Last model that actually answered a request, per workspace, so a bad
+  // switch is one click to undo.
+  var LS_GOOD_MODEL = 'cc.model.lastGood';
+  // Health probe budget. A model that has not answered in 20 s is not
+  // "slow", it is broken — say so instead of spinning forever.
+  var PROBE_TIMEOUT_MS = 20000;
+  // How long the trigger keeps the "✓ Saved" confirmation.
+  var SAVED_MS = 1200;
+
   // Autonomy modes — must match agent.js' `#agent-mode-select` values and
   // settings.js' `DEFAULTS.agentMode` ('ask').
   var AGENT_MODES = ['ask', 'edit-auto', 'full-auto'];
@@ -100,6 +109,113 @@
       if (terms[i] && hay.indexOf(terms[i]) === -1) return false;
     }
     return true;
+  }
+
+  /* ---------------------------------------------------------------------
+     Model family classification.
+
+     NONE of the models behind this backend support native tool calling:
+     every request comes back with `usedNativeTools: false`, so the agent
+     drives them entirely through the `<<<TOOL>>>…<<<END>>>` text protocol.
+     That makes three properties of a model id matter to the user, and
+     getting them wrong is what made "switching the model" look broken:
+
+       1. IMAGE  — cannot answer a text prompt at all → not selectable.
+       2. THINK  — emits a reasoning wrapper, which pollutes the text
+                   protocol the agent parses → flagged, not blocked.
+       3. CODER  — instruction-tuned coding models, the ones that actually
+                   follow the tool protocol → "recommended".
+
+     Rules are deliberately ordered: image → coder → reasoning → plain, so
+     an id like `qwen-image-2-1` can never be mistaken for a coder model.
+     --------------------------------------------------------------------- */
+  var BADGE_REASONING = 'thinking';
+  var BADGE_CODER = 'coder';
+  var BADGE_IMAGE = 'image';
+
+  var TIP_IMAGE = 'image model — cannot answer text prompts';
+  var TIP_REASONING = 'reasoning model — may add thinking output that confuses the agent tool parser';
+  var TIP_CODER = 'recommended for coding — follows the agent tool protocol';
+  var TIP_PLAIN = 'general chat model — may or may not follow the agent tool protocol';
+
+  // Image generation models (any `*-image*`, or a known diffusion family).
+  function isImageModel(s) {
+    if (/(^|[-_.])image([-_.]|$)/.test(s)) return true;
+    return /^(flux|sdxl|dall|stable-diffusion|midjourney|ideogram)/.test(s);
+  }
+
+  // Instruction-tuned coding models. Checked before `isReasoningModel` so a
+  // hypothetical `*-coder-r1` still counts as the usable coder.
+  function isCoderModel(s) {
+    if (/qwen[\d.]*-?coder/.test(s)) return true;      // qwen-2.5-coder-7b
+    if (/coder/.test(s)) return true;                 // *-coder-*, *coder*
+    if (/^codestral/.test(s)) return true;
+    if (/^gpt-oss/.test(s)) return true;
+    if (/llama.*instruct/.test(s)) return true;
+    if (/qwen.*instruct/.test(s)) return true;
+    if (/(^|[-_.])it([-_.]|$)/.test(s)) return true;   // mistral-nemo-…-it
+    return false;
+  }
+
+  // Reasoning / thinking models: R-series (`deepseek-r1-8b`), `reason*`,
+  // `thinking*`, `<think>`-flavoured ids.
+  function isReasoningModel(s) {
+    if (/(^|[-_.])r\d+([-_.]|$)/.test(s)) return true;   // deepseek-r1-8b
+    if (/reason/.test(s)) return true;
+    if (/think/.test(s)) return true;
+    if (/(^|[-_.])o\d+([-_.]|$)/.test(s)) return true;   // gpt-oss-20b style
+    return false;
+  }
+
+  // The "Agent-friendly" filter: models known to follow the tool protocol.
+  // Deliberately a subset of isCoderModel (no bare `-it`), so the filtered
+  // view is small and trustworthy.
+  function isAgentFriendlyModel(s) {
+    if (isImageModel(s)) return false;
+    if (/qwen.*coder/.test(s)) return true;
+    if (/^codestral/.test(s)) return true;
+    if (/^gpt-oss/.test(s)) return true;
+    if (/llama.*instruct/.test(s)) return true;
+    return false;
+  }
+
+  // Single source of truth for badges / tooltips / selectability.
+  function classifyModel(id) {
+    var s = String(id == null ? '' : id).toLowerCase();
+    if (isImageModel(s)) {
+      return {
+        family: 'image',
+        badge: BADGE_IMAGE,
+        tip: TIP_IMAGE,
+        disabled: true,
+        agentFriendly: false
+      };
+    }
+    if (isCoderModel(s)) {
+      return {
+        family: 'coder',
+        badge: BADGE_CODER,
+        tip: TIP_CODER,
+        disabled: false,
+        agentFriendly: isAgentFriendlyModel(s)
+      };
+    }
+    if (isReasoningModel(s)) {
+      return {
+        family: 'reasoning',
+        badge: BADGE_REASONING,
+        tip: TIP_REASONING,
+        disabled: false,
+        agentFriendly: false
+      };
+    }
+    return {
+      family: 'plain',
+      badge: '',
+      tip: TIP_PLAIN,
+      disabled: false,
+      agentFriendly: false
+    };
   }
 
   function ChatControls() {
@@ -218,10 +334,20 @@
     var foot = document.createElement('div');
     foot.className = 'dd-foot';
 
+    // Transient save/confirm state shown on the trigger itself
+    // ("saving…" → "✓ Saved") so a switch is visibly *landed*.
+    var status = document.createElement('span');
+    status.className = 'dd-status';
+    status.hidden = true;
+
     trigger.innerHTML = CARET_SVG;
     trigger.insertBefore(label, trigger.firstChild);
+    trigger.appendChild(status);
 
     if (search) menu.appendChild(search);
+    // Optional per-dropdown action panel (model dropdown: filter toggle,
+    // Test connection, health result, retry/restore actions).
+    if (opts.buildExtras) menu.appendChild(opts.buildExtras(dd));
     menu.appendChild(list);
     if (dd.searchable) menu.appendChild(foot);
 
@@ -245,15 +371,40 @@
         var item = {
           value: it.value,
           label: it.label || it.value,
-          hint: it.hint || ''
+          hint: it.hint || '',
+          badge: it.badge || '',
+          badgeKind: it.badgeKind || 'plain',
+          disabled: it.disabled === true,
+          disabledTip: it.disabledTip || ''
         };
-        item.searchText = (item.value + ' ' + item.label).toLowerCase();
+        item.searchText = (item.value + ' ' + item.label + ' ' + (item.badge || '')).toLowerCase();
         return item;
       });
       if (selected != null) dd.value = selected;
       dd.setFilter('');
       dd.sync();
     };
+
+    // Transient trigger state. `text` falsy → back to the model id.
+    dd.setStatus = function (text, kind) {
+      if (!text) {
+        status.hidden = true;
+        status.textContent = '';
+        status.className = 'dd-status';
+        trigger.classList.remove('dd-has-status');
+        return;
+      }
+      // Untrusted error text still goes in as textContent, never markup.
+      status.textContent = text;
+      status.className = 'dd-status' + (kind ? ' dd-status-' + kind : '');
+      status.hidden = false;
+      trigger.classList.add('dd-has-status');
+    };
+
+    dd.statusText = function () { return status.textContent; };
+
+    // Re-run the predicate + repaint (after an external state change).
+    dd.refresh = function () { dd.renderMenu(); };
 
     dd.setFilter = function (text) {
       dd.filter = text == null ? '' : String(text);
@@ -266,7 +417,11 @@
       while (list.firstChild) list.removeChild(list.firstChild);
       dd.visible = [];
       for (var i = 0; i < dd.items.length; i++) {
-        if (matchesFilter(dd.items[i], dd.filter)) dd.visible.push(dd.items[i]);
+        var it = dd.items[i];
+        if (!matchesFilter(it, dd.filter)) continue;
+        // opts.predicate powers the "Agent-friendly only" toggle.
+        if (opts.predicate && !opts.predicate(it.value, it)) continue;
+        dd.visible.push(it);
       }
 
       var selectedRow = -1;
@@ -276,6 +431,10 @@
         row.setAttribute('role', 'option');
         row.dataset.index = String(i);
         row.setAttribute('aria-selected', item.value === dd.value ? 'true' : 'false');
+        if (item.disabled) {
+          row.classList.add('dd-item-disabled');
+          row.setAttribute('aria-disabled', 'true');
+        }
         var check = document.createElement('span');
         check.className = 'dd-check';
         check.setAttribute('aria-hidden', 'true');
@@ -285,15 +444,31 @@
         text.textContent = item.label;         // untrusted → textContent
         row.appendChild(check);
         row.appendChild(text);
-        if (item.hint) row.title = item.hint;
+        if (item.badge) {
+          var badge = document.createElement('span');
+          badge.className = 'dd-badge dd-badge-' + item.badgeKind;
+          badge.textContent = item.badge;      // untrusted → textContent
+          row.appendChild(badge);
+        }
+        // The most actionable explanation wins: why it is unselectable,
+        // else the family warning, else the model state.
+        row.title = item.disabled
+          ? (item.disabledTip || item.hint || '')
+          : (item.hint || item.disabledTip || '');
+        if (item.disabled) row.style.cursor = 'not-allowed';
         if (item.value === dd.value) selectedRow = i;
         row.addEventListener('mousedown', function (e) {
           e.preventDefault();
+          if (item.disabled) {
+            // Explain instead of silently doing nothing.
+            dd.showStatus(item.disabledTip || TIP_IMAGE, 'warn', 2200);
+            return;
+          }
           dd.close(true);
           dd.chooseVisible(i);
         });
         row.addEventListener('mouseenter', function () {
-          dd.setActive(i);
+          if (!item.disabled) dd.setActive(i);
         });
         list.appendChild(row);
       });
@@ -303,7 +478,7 @@
         var empty = document.createElement('div');
         empty.className = 'dd-empty-row';
         empty.textContent = dd.items.length
-          ? 'No matches for “' + dd.filter + '”'
+          ? (dd.filter ? 'No matches for “' + dd.filter + '”' : (opts.emptyFilteredText || 'Nothing to show'))
           : (opts.emptyText || 'Nothing to show');
         list.appendChild(empty);
       }
@@ -311,14 +486,30 @@
       if (foot) {
         var total = dd.items.length;
         var shown = dd.visible.length;
-        foot.textContent = total === shown && !dd.filter
+        var filtered = !!dd.filter || (opts.predicate && shown !== total);
+        foot.textContent = !filtered && !dd.filter
           ? total + (total === 1 ? ' model' : ' models')
           : 'showing ' + shown + ' of ' + total;
-        foot.classList.toggle('dd-foot-filtered', !!dd.filter);
+        foot.classList.toggle('dd-foot-filtered', filtered);
       }
 
       dd.activeIndex = selectedRow >= 0 ? selectedRow : 0;
       dd.setActive(dd.activeIndex);
+    };
+
+    // Brief feedback on the trigger (blocked pick, save confirmation, probe
+    // result). One timer owns the status so a late timer can never wipe a
+    // newer message.
+    dd.showStatus = function (text, kind, ms) {
+      dd.setStatus(text, kind);
+      if (dd._statusTimer) clearTimeout(dd._statusTimer);
+      dd._statusTimer = null;
+      if (text) {
+        dd._statusTimer = setTimeout(function () {
+          dd._statusTimer = null;
+          dd.setStatus(opts.idleStatus ? opts.idleStatus() : '');
+        }, ms || SAVED_MS);
+      }
     };
 
     // Index of `v` within the *currently visible* rows.
@@ -334,7 +525,13 @@
 
     dd.setActive = function (i) {
       if (!dd.visible.length) { dd.activeIndex = 0; return; }
-      dd.activeIndex = Math.max(0, Math.min(dd.visible.length - 1, i));
+      var start = Math.max(0, Math.min(dd.visible.length - 1, i));
+      // Never land the keyboard cursor on an unselectable row.
+      var guard = dd.visible.length;
+      while (guard-- > 0 && dd.visible[start] && dd.visible[start].disabled) {
+        start = start + 1 < dd.visible.length ? start + 1 : start - 1;
+      }
+      dd.activeIndex = start;
       var rows = list.querySelectorAll ? list.querySelectorAll('.dd-item') : [];
       for (var k = 0; k < rows.length; k++) rows[k].classList.toggle('dd-item-active', k === dd.activeIndex);
     };
@@ -421,6 +618,10 @@
     dd.chooseVisible = function (i) {
       var item = dd.visible[i];
       if (!item) return;
+      if (item.disabled) {
+        dd.showStatus(item.disabledTip || 'Not selectable', 'warn', 2200);
+        return;
+      }
       if (item.value !== dd.value) {
         if (opts.onChange) opts.onChange(item.value);
       } else {
@@ -678,6 +879,15 @@
     this._initGlobalDismiss();
     this._model = DEFAULT_MODEL;
     this._modelListOk = false;
+    // Switch state machine: 'idle' | 'saving' | 'saved' | 'failed'
+    this._modelSaveState = 'idle';
+    this._modelAgentOnly = false;
+    this._modelError = null;      // { model, message }
+    this._saveError = null;       // { model, message } — failed persistence
+    this._probeResult = null;     // { kind, text, pending, model }
+    this._probeSeq = 0;
+    this._probeTimer = null;
+    this._lastGoodModel = this._readLastGoodModel();
     this.el.model.addEventListener('change', function () {
       self.setModel(self.el.model.value);
     });
@@ -688,11 +898,327 @@
       searchable: true,
       searchPlaceholder: 'Type to filter models…',
       emptyText: 'No models available',
+      emptyFilteredText: 'No agent-friendly models match this filter',
       placeholder: DEFAULT_MODEL,
+      // Model ids come from the server: they are only ever compared as
+      // strings (never injected as markup), and the toggle filters on them.
+      predicate: function (value) {
+        return !self._modelAgentOnly || isAgentFriendlyModel(value);
+      },
+      buildExtras: function (dd) { return self._buildModelExtras(); },
+      // Keep the pending failure visible while the trigger shows a save state.
+      idleStatus: function () {
+        return (self._modelError && self._modelError.model === self._model)
+          ? '⚠ ' + String(self._modelError.message || 'error').slice(0, 40)
+          : '';
+      },
       onChange: function (v) { self.setModel(v); }
     });
+    this._buildErrorBar();
+    this._watchAiErrors();
     this._loadModel();
   };
+
+  // ---------------------------- model popup chrome --------------------------
+
+  // Action panel pinned between the filter box and the list: agent-friendly
+  // toggle, Test connection, live probe result, and the recovery actions that
+  // appear only when there is something to recover from.
+  ChatControls.prototype._buildModelExtras = function () {
+    var self = this;
+    var box = document.createElement('div');
+    box.className = 'dd-extras';
+
+    var row = document.createElement('div');
+    row.className = 'dd-extras-row';
+
+    // "Agent-friendly only" — the fix for "switching seems broken": most of
+    // the list cannot drive the agent at all.
+    var toggle = document.createElement('label');
+    toggle.className = 'dd-toggle';
+    toggle.title = 'Show only models known to follow the agent tool protocol';
+    var box2 = document.createElement('input');
+    box2.type = 'checkbox';
+    box2.className = 'dd-toggle-box';
+    box2.checked = false;
+    var tText = document.createElement('span');
+    tText.className = 'dd-toggle-text';
+    tText.textContent = 'Agent-friendly only';
+    toggle.appendChild(box2);
+    toggle.appendChild(tText);
+    box2.addEventListener('change', function () {
+      self._modelAgentOnly = !!box2.checked;
+      self.modelDd.setFilter(self.modelDd.filter);
+    });
+
+    var test = document.createElement('button');
+    test.type = 'button';
+    test.className = 'dd-action dd-action-test';
+    test.textContent = 'Test connection';
+    test.title = 'Send a one-word prompt to the selected model (20 s limit)';
+    test.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); });
+    test.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      self.testModelConnection();
+    });
+
+    row.appendChild(toggle);
+    row.appendChild(test);
+    box.appendChild(row);
+
+    // Probe result line (textContent only — error text is untrusted).
+    var out = document.createElement('div');
+    out.className = 'dd-probe';
+    out.hidden = true;
+    out.setAttribute('role', 'status');
+    box.appendChild(out);
+
+    // Recovery actions: retry the last prompt / go back to a working model.
+    var fix = document.createElement('div');
+    fix.className = 'dd-extras-fix';
+    fix.hidden = true;
+
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'dd-action dd-action-retry';
+    retry.textContent = 'Retry last prompt';
+    retry.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); });
+    retry.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); self.retryLastPrompt(); });
+
+    var save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'dd-action dd-action-save';
+    save.textContent = 'Retry save';
+    save.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); });
+    save.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); self.retryModelSave(); });
+
+    var good = document.createElement('button');
+    good.type = 'button';
+    good.className = 'dd-action dd-action-good';
+    good.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); });
+    good.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); self.restoreLastGoodModel(); });
+
+    var coder = document.createElement('button');
+    coder.type = 'button';
+    coder.className = 'dd-action dd-action-coder';
+    coder.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); });
+    coder.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); self.setModel(DEFAULT_MODEL); });
+
+    fix.appendChild(retry);
+    fix.appendChild(save);
+    fix.appendChild(good);
+    fix.appendChild(coder);
+    box.appendChild(fix);
+
+    this._modelExtras = {
+      box: box, out: out, fix: fix,
+      retry: retry, save: save, good: good, coder: coder, test: test
+    };
+    return box;
+  };
+
+  // Which recovery actions are offered, right now:
+  //  - a failed save            → "Retry save"
+  //  - a failed request on the  → "Retry last prompt", "Restore last working
+  //    current model              model", and "Switch to <coder>" when the
+  //                                failing model is not itself a coder model
+  ChatControls.prototype._renderFix = function () {
+    var x = this._modelExtras;
+    if (!x) return;
+    var saveFailed = !!this._saveError;
+    var failedModel = this._modelError && this._modelError.model === this._model;
+    var show = saveFailed || !!failedModel;
+    x.fix.hidden = !show;
+    x.save.hidden = !saveFailed;
+    x.retry.hidden = !failedModel;
+    x.good.hidden = !failedModel || !this._lastGoodModel || this._lastGoodModel === this._model;
+    x.good.textContent = this._lastGoodModel
+      ? 'Restore last working model (' + this._lastGoodModel + ')'
+      : 'Restore last working model';
+    // Only offer the coder suggestion when it is a different model that is
+    // actually available in the list.
+    var hasCoder = false;
+    if (this.modelDd) {
+      for (var i = 0; i < this.modelDd.items.length; i++) {
+        if (this.modelDd.items[i].value === DEFAULT_MODEL) { hasCoder = true; break; }
+      }
+    }
+    var offerCoder = failedModel && !isCoderModel(String(this._model).toLowerCase())
+      && this._model !== DEFAULT_MODEL && hasCoder;
+    x.coder.hidden = !offerCoder;
+    x.coder.textContent = 'Switch to ' + DEFAULT_MODEL;
+  };
+
+  // Control-bar error affordance (always visible when there is an error).
+  ChatControls.prototype._renderModelError = function () {
+    var e = this._errorBar;
+    if (!e) return;
+    var err = this._modelError;
+    if (!err) {
+      e.root.hidden = true;
+      return;
+    }
+    e.root.hidden = false;
+    e.msg.textContent = err.model + ': ' + String(err.message || 'request failed');
+    e.root.title = 'Last AI request failed on ' + err.model;
+    this._renderFix();
+  };
+
+  ChatControls.prototype._clearModelError = function () {
+    this._modelError = null;
+    this._renderModelError();
+  };
+
+  /* ---- failure intake ------------------------------------------------ */
+  // Every failure path funnels through here so the ⚠, the control-bar retry
+  // and the "switch to a coder model" suggestion are consistent.
+  ChatControls.prototype.noteAiError = function (err, model) {
+    var m = (typeof model === 'string' && model) ? model : this._model;
+    if (!m) return;
+    var msg = (err && err.message) ? err.message : String(err == null ? 'unknown error' : err);
+    this._modelError = { model: m, message: msg };
+    // Repaint so the failing entry carries the ⚠ badge.
+    if (this.modelDd && this.modelDd.items.length) {
+      this._setOptions(this.modelDd.items.map(function (it) { return it.value; }), this._modelListOk);
+    } else {
+      this._renderModelError();
+    }
+  };
+
+  // "Model doesn't respond" arrives from three places; all three are wired.
+  ChatControls.prototype._watchAiErrors = function () {
+    var self = this;
+    function onErr(e) {
+      var msg = (e && e.detail && (e.detail.message || e.detail.error)) || (e && e.detail) || null;
+      self.noteAiError(msg);
+    }
+    global.addEventListener('chat:error', onErr);
+    global.addEventListener('ai:error', onErr);
+    try {
+      var api = global.electronAPI;
+      if (api && typeof api.onAiError === 'function') {
+        api.onAiError(function (err) { self.noteAiError(err); });
+      }
+    } catch (e) { /* ignore */ }
+  };
+
+  // Re-send the last user prompt. Prefers the in-memory history, falls back to
+  // whatever is in the composer; never throws.
+  ChatControls.prototype.retryLastPrompt = function () {
+    var text = '';
+    try {
+      var ai = global.ai;
+      if (ai && ai.history && ai.history.length) {
+        for (var i = ai.history.length - 1; i >= 0; i--) {
+          if (ai.history[i] && ai.history[i].role === 'user' && ai.history[i].content) {
+            text = String(ai.history[i].content);
+            break;
+          }
+        }
+      }
+      if (!text && ai && ai.input && ai.input.value) text = String(ai.input.value);
+    } catch (e) { /* ignore */ }
+    if (!text) {
+      if (this.modelDd) this.modelDd.showStatus('No prompt to retry', 'warn', 2000);
+      return false;
+    }
+    try {
+      var ai2 = global.ai;
+      if (ai2 && typeof ai2.sendPromptWithContext === 'function') {
+        ai2.sendPromptWithContext(text);
+      } else if (ai2 && ai2.input && typeof ai2.handleSend === 'function') {
+        ai2.input.value = text;
+        ai2.handleSend();
+      } else {
+        throw new Error('no assistant');
+      }
+    } catch (e) {
+      this.noteAiError((e && e.message) || e, this._model);
+      return false;
+    }
+    this._renderModelError();
+    return true;
+  };
+
+
+  // Always-on last-error affordance in the control bar, next to the model
+  // trigger. Hidden while there is no error.
+  ChatControls.prototype._buildErrorBar = function () {
+    var self = this;
+    var bar = document.createElement('div');
+    bar.className = 'cc-model-error';
+    bar.hidden = true;
+    bar.setAttribute('role', 'alert');
+
+    var icon = document.createElement('span');
+    icon.className = 'cc-model-error-icon';
+    icon.textContent = '⚠';
+
+    var msg = document.createElement('span');
+    msg.className = 'cc-model-error-msg';
+
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'cc-model-error-btn';
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', function () { self.retryLastPrompt(); });
+
+    bar.appendChild(icon);
+    bar.appendChild(msg);
+    bar.appendChild(retry);
+
+    this._errorBar = { root: bar, msg: msg, retry: retry };
+
+    // Park it in the bar, immediately after the model dropdown.
+    var host = this.el.bar;
+    if (host && this.modelDd && this.modelDd.root.parentNode === host) {
+      host.insertBefore(bar, this.modelDd.root.nextSibling);
+    } else if (host) {
+      host.appendChild(bar);
+    }
+  };
+
+  // ------------------------- last known-good model --------------------------
+
+  ChatControls.prototype._readLastGoodModel = function () {
+    try {
+      var v = global.localStorage && global.localStorage.getItem(LS_GOOD_MODEL);
+      return typeof v === 'string' && v ? v : null;
+    } catch (e) { return null; }
+  };
+
+  ChatControls.prototype._writeLastGoodModel = function (m) {
+    if (typeof m !== 'string' || !m) return;
+    this._lastGoodModel = m;
+    try {
+      if (global.localStorage) global.localStorage.setItem(LS_GOOD_MODEL, m);
+    } catch (e) { /* ignore */ }
+  };
+
+  // A model is "known good" once it has proven it can answer a request.
+  ChatControls.prototype.markModelGood = function (m) {
+    if (typeof m !== 'string' || !m) return;
+    if (this._lastGoodModel !== m) this._writeLastGoodModel(m);
+    if (this._modelError && this._modelError.model === m) this._clearModelError();
+    else this._renderModelError();
+  };
+
+  // Called after a failed request so a good switch can be undone.
+  ChatControls.prototype.restoreLastGoodModel = function () {
+    var m = this._lastGoodModel;
+    if (!m) {
+      if (this.modelDd) this.modelDd.showStatus('No known-good model yet', 'warn', 2200);
+      return false;
+    }
+    if (m === this._model) {
+      if (this.modelDd) this.modelDd.showStatus('Already on ' + m, 'warn', 1600);
+      return false;
+    }
+    this.setModel(m);
+    return true;
+  };
+
 
   ChatControls.prototype._loadModel = function () {
     var self = this;
@@ -741,6 +1267,7 @@
   // `ok` is false when the server list was unavailable → the popup keeps the
   // configured model alone and says so instead of silently showing nothing.
   ChatControls.prototype._setOptions = function (models, ok) {
+    var self = this;
     var sel = this.el.model;
     var current = this._model;
     this._modelListOk = ok !== false;
@@ -785,18 +1312,34 @@
 
     if (this.modelDd) {
       var solo = list.length < 2;
+      var keepFilter = this.modelDd.filter;
       this.modelDd.disabled = false;
       this.modelDd.trigger.classList.toggle('dd-solo', solo);
       this.modelDd.trigger.title = solo
         ? 'Could not reach the model server — showing the configured model (' + current + ')'
         : 'AI model used for chat and agent requests · ' + list.length + ' available';
       this.modelDd.setItems(list.map(function (m) {
+        var c = classifyModel(m);
+        var failed = self._modelError && self._modelError.model === m;
+        var parts = [];
+        if (m === current) parts.push('Currently selected');
+        if (c.tip) parts.push(c.tip);
+        if (solo && m !== current) parts.push('Model server unreachable');
+        if (failed) parts.unshift('Last request failed: ' + String(self._modelError.message || 'unknown error'));
         return {
           value: m,
           label: m,
-          hint: m === current ? 'Currently selected' : (solo ? 'Model server unreachable' : '')
+          badge: failed ? '⚠' : c.badge,
+          badgeKind: failed ? 'error' : (c.family === 'coder' ? 'good' : (c.badge ? 'warn' : 'plain')),
+          disabled: c.disabled,
+          disabledTip: c.tip,
+          hint: parts.join(' · ')
         };
       }), current);
+      // Rebuilding the list must not silently drop what the user typed.
+      if (keepFilter) this.modelDd.setFilter(keepFilter);
+      this._renderProbe();
+      this._renderModelError();
     }
   };
 
@@ -824,20 +1367,231 @@
       this.modelDd.items.forEach(function (it) { if (it.value === m) inList = true; });
       if (!inList) {
         // Not in the list yet — add it rather than showing a stale label.
-        this.modelDd.items = [{ value: m, label: m, hint: 'Currently selected' }]
-          .concat(this.modelDd.items);
+        this.modelDd.items = [{
+          value: m,
+          label: m,
+          hint: 'Currently selected',
+          badge: classifyModel(m).badge,
+          badgeKind: 'plain',
+          disabled: classifyModel(m).disabled,
+          disabledTip: classifyModel(m).tip
+        }].concat(this.modelDd.items);
       }
       this.modelDd.value = m;
       this.modelDd.renderMenu();
       this.modelDd.sync();
     }
+    // The proxy is authoritative immediately; persistence is confirmed
+    // asynchronously and reported on the trigger (see _persistModel).
+    this._persistModel(m);
+    global.dispatchEvent(new CustomEvent('chat:model-changed', { detail: { model: m } }));
+  };
+
+  /* ---- switch state machine -------------------------------------------
+     idle ──setModel()──► saving ──resolved──► saved ──1.2 s──► idle
+                            │
+                            └──rejected/threw──► failed ──► idle
+                                                        (Retry stays available)
+
+     `saved` is only claimed when `updateAiConfig` actually resolved — the
+     whole point is that the user can trust the confirmation.
+     --------------------------------------------------------------------- */
+  ChatControls.prototype._setSaveState = function (state, errText) {
+    this._modelSaveState = state;
+    var dd = this.modelDd;
+    if (!dd) return;
+    if (state === 'saving') {
+      dd.showStatus('saving…', 'saving');
+    } else if (state === 'saved') {
+      this._saveError = null;
+      dd.showStatus('✓ Saved', 'ok', SAVED_MS);
+      this._renderFix();
+    } else if (state === 'failed') {
+      this._saveError = { model: this._model, message: String(errText || 'update failed') };
+      dd.showStatus('✗ Could not save', 'error', 3000);
+      this._renderFix();
+    } else {
+      this._setSaveStateLabel();
+    }
+  };
+
+  // Restore the idle status (which may be the ⚠ last-error line).
+  ChatControls.prototype._setSaveStateLabel = function () {
+    var dd = this.modelDd;
+    if (!dd) return;
+    var idle = '';
+    if (this._saveError && this._saveError.model === this._model) {
+      idle = '⚠ not saved';
+    } else if (this._modelError && this._modelError.model === this._model) {
+      idle = '⚠ ' + String(this._modelError.message || 'error').slice(0, 40);
+    }
+    if (idle) dd.showStatus(idle, 'error', 3000);
+    else dd.showStatus('');
+  };
+
+  ChatControls.prototype._persistModel = function (m) {
+    var self = this;
+    var api = global.electronAPI;
+    if (!api || typeof api.updateAiConfig !== 'function') {
+      // No bridge: the proxy still holds the value for this session.
+      this._setSaveState('failed', 'no AI bridge');
+      return;
+    }
+    this._setSaveState('saving');
+    var res;
     try {
-      var api = global.electronAPI;
-      if (api && typeof api.updateAiConfig === 'function') api.updateAiConfig({ model: m });
+      res = api.updateAiConfig({ model: m });
     } catch (e) {
       console.debug('chat-controls: updateAiConfig failed', e);
+      this._setSaveState('failed', (e && e.message) || e);
+      return;
     }
-    global.dispatchEvent(new CustomEvent('chat:model-changed', { detail: { model: m } }));
+    if (!res || typeof res.then !== 'function') {
+      // Synchronous bridge (or test double): it cannot have failed loudly.
+      this._setSaveState('saved');
+      return;
+    }
+    res.then(function () {
+      // A newer switch may have landed while this one was in flight.
+      if (self._model !== m) return;
+      self._setSaveState('saved');
+    }).catch(function (e) {
+      console.debug('chat-controls: updateAiConfig failed', e);
+      self._setSaveState('failed', (e && e.message) || e);
+    });
+  };
+
+  // Explicit re-attempt after a failed save.
+  ChatControls.prototype.retryModelSave = function () {
+    if (!this._model) return false;
+    this._persistModel(this._model);
+    return true;
+  };
+
+  /* ---- health probe ---------------------------------------------------
+     One `aiChatOnce` with a 3-token prompt against the *currently selected*
+     model, raced against a 20 s timeout. Never throws: every outcome ends up
+     as a line of text in the popup (and a status on the trigger).
+     --------------------------------------------------------------------- */
+  ChatControls.prototype._renderProbe = function () {
+    var x = this._modelExtras;
+    if (!x || !x.out) return;
+    var p = this._probeResult;
+    if (!p) {
+      x.out.hidden = true;
+      x.out.textContent = '';
+      x.out.className = 'dd-probe';
+      x.test.disabled = false;
+      x.test.textContent = 'Test connection';
+      return;
+    }
+    x.out.hidden = false;
+    x.out.className = 'dd-probe dd-probe-' + p.kind;
+    // Untrusted model id + server error text → textContent only.
+    x.out.textContent = p.text;
+    if (p.pending) {
+      x.test.disabled = true;
+      x.test.textContent = 'Testing…';
+    } else {
+      x.test.disabled = false;
+      x.test.textContent = 'Test connection';
+    }
+  };
+
+  ChatControls.prototype.testModelConnection = function (model) {
+    var self = this;
+    var m = (typeof model === 'string' && model) ? model : this._model;
+    var api = global.electronAPI;
+
+    if (!m) {
+      this._probeResult = { kind: 'bad', text: '✗ no model selected', pending: false };
+      this._renderProbe();
+      return Promise.resolve(false);
+    }
+    if (!api || typeof api.aiChatOnce !== 'function') {
+      this._probeResult = { kind: 'bad', text: '✗ AI bridge unavailable — cannot test', pending: false };
+      this._renderProbe();
+      if (this.modelDd) this.modelDd.showStatus('✗ no AI bridge', 'error', 2500);
+      return Promise.resolve(false);
+    }
+
+    var started = Date.now();
+    var reqId = 'cc-probe-' + (++this._probeSeq);
+    this._probeResult = { kind: 'pending', text: '… testing ' + m, pending: true, model: m };
+    this._renderProbe();
+    if (this.modelDd) this.modelDd.showStatus('testing…', 'saving', PROBE_TIMEOUT_MS);
+
+    var payload = {
+      id: reqId,
+      model: m,
+      messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
+      maxTokens: 16,
+      temperature: 0
+    };
+
+    var settled = false;
+    var call;
+    try {
+      call = api.aiChatOnce(payload);
+    } catch (e) {
+      return this._probeFail(m, (e && e.message) || e, Date.now() - started);
+    }
+    if (!call || typeof call.then !== 'function') {
+      // Synchronous test double / bridge: no error means it answered.
+      return this._probeOk(m, Date.now() - started);
+    }
+
+    var timeout = new Promise(function (resolve) {
+      self._probeTimer = setTimeout(function () { resolve({ __ccTimeout: true }); }, PROBE_TIMEOUT_MS);
+    });
+
+    return Promise.race([call, timeout]).then(function (res) {
+      if (settled) return false;
+      settled = true;
+      if (self._probeTimer) { clearTimeout(self._probeTimer); self._probeTimer = null; }
+      if (res && res.__ccTimeout) {
+        // Best effort: tell the main process to drop the HTTP request.
+        try {
+          if (typeof api.aiCancelOnce === 'function') api.aiCancelOnce(reqId);
+        } catch (e) { /* ignore */ }
+        return self._probeFail(m, 'timed out after ' + Math.round(PROBE_TIMEOUT_MS / 1000) + ' s — model does not respond', Date.now() - started, true);
+      }
+      if (res && res.error) return self._probeFail(m, res.error, Date.now() - started);
+      return self._probeOk(m, Date.now() - started);
+    }).catch(function (e) {
+      if (settled) return false;
+      settled = true;
+      if (self._probeTimer) { clearTimeout(self._probeTimer); self._probeTimer = null; }
+      return self._probeFail(m, (e && e.message) || e, Date.now() - started);
+    });
+  };
+
+  ChatControls.prototype._probeOk = function (m, ms) {
+    this._probeResult = {
+      kind: 'good',
+      pending: false,
+      model: m,
+      text: '✓ ' + m + ' works (' + Math.max(0, Math.round(ms)) + ' ms)'
+    };
+    this._renderProbe();
+    if (this.modelDd) this.modelDd.showStatus('✓ ' + Math.max(0, Math.round(ms)) + ' ms', 'ok', 1800);
+    // It answered → it is a known-good model for this workspace.
+    this.markModelGood(m);
+    return true;
+  };
+
+  ChatControls.prototype._probeFail = function (m, errText, ms, isTimeout) {
+    var msg = String(errText == null ? 'unknown error' : errText);
+    this._probeResult = {
+      kind: 'bad',
+      pending: false,
+      model: m,
+      text: '✗ ' + m + ' failed: ' + msg + (isTimeout ? '' : ' (' + Math.max(0, Math.round(ms)) + ' ms)')
+    };
+    this._renderProbe();
+    if (this.modelDd) this.modelDd.showStatus('✗ no response', 'error', 3000);
+    this.noteAiError(msg, m);
+    return false;
   };
 
   // --------------------------- autonomy mode --------------------------------

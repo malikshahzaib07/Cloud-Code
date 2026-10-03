@@ -16,12 +16,14 @@ src/ai-engine/
 ├── index.js              facade — registers window.CloudAI
 ├── core/
 │   ├── protocol.js       tool-call protocol + ASCII-decoration filter
+│   ├── model-adapters.js per-family model adapters (family, prompt style, JSON cautions)
 │   ├── tools.js          tool schemas + argument normalisation + path sandbox
-│   ├── prompt.js         system prompt builder
+│   ├── prompt.js         system prompt builder (family-aware)
 │   └── loop.js           AgentLoop — the tool loop
 └── test/
     ├── run.js            zero-dependency harness + entry point
-    └── engine.test.js    the suite
+    ├── engine.test.js    protocol / tools / prompt / loop suite
+    └── adapters.test.js  model-adapter, family-prompt and loop-resilience suite
 ```
 
 ## What each module owns
@@ -29,6 +31,7 @@ src/ai-engine/
 | Module | Owns | Does **not** own |
 | --- | --- | --- |
 | `core/protocol.js` | `<<<TOOL>>>`/`<<<RESULT>>>` text protocol, tolerant JSON repair, native `tool_calls` parsing, transcript message formatting (`formatAssistantTurn`, `formatToolResult`), `stripAsciiDecoration` / `stripLeadingThinking` / `condenseText` | any I/O, any model client |
+| `core/model-adapters.js` | `detectFamily`, `getAdapter`, `listKnownFamilies`, `isUsableForAgent`, `stripReasoning` — what a given model id can and cannot do | completions, prompting |
 | `core/tools.js` | the 16 OpenAI function schemas (`TOOLS`), `TOOL_ICONS` / `TOOL_TITLES`, `normalizeArgs` (alias + stringly-typed coercion + nested `arguments`), `parseLineRange`, `globToRegExp`, `resolvePath` sandbox | executing tools, rendering cards |
 | `core/prompt.js` | `buildSystemPrompt({root, today, tools, thinkLevel, maxSteps, allowOutsideWorkspace, memoryBlock})` | reading settings or memory itself |
 | `core/loop.js` | `AgentLoop` — control flow, step cap, cancellation, per-tool error containment, event emission | the model client, tool implementations, the DOM |
@@ -43,6 +46,8 @@ window.CloudAI = {
                            // formatAssistantTurn, formatToolResult,
                            // stripAsciiDecoration, stripLeadingThinking,
                            // isDecorativeLine, condenseText
+  adapters,                // detectFamily, getAdapter, listKnownFamilies,
+                           // isUsableForAgent, isImageOnly, stripReasoning
   tools,                   // TOOLS, TOOL_NAMES, TOOL_ICONS, TOOL_TITLES,
                            // READONLY_TOOLS, NOISE_DIRS, normalizeArgs,
                            // parseLineRange, globToRegExp, resolvePath, getTool
@@ -60,19 +65,22 @@ const loop = new CloudAI.AgentLoop({
   callModel: async (messages, { signal, useNativeTools, step }) =>
     ({ content, toolCalls, usedNativeTools, reasoning, finishReason, error }),
   executeTool: async (toolCall) => 'the text to append as the tool result',
-  onEvent: (evt) => { /* evt.type */ }
+  onEvent: (evt) => { /* evt.type */ },
+  host: { nudgeOnSilentTurns: true },   // correct a model that chats instead of calling a tool
+  requireToolFirstStep: false           // also correct a prose FIRST turn
 });
 
 const result = await loop.run({ messages, systemPrompt });
-// { ok, steps, stopReason, cancelled, finalText, messages, error }
+// { ok, steps, stopReason, cancelled, finalText, messages, error,
+//   lastError, nudges, retries }
 ```
 
 `stopReason` is one of `done`, `cancelled`, `max_steps`, `model_error`,
-`empty_response`. `loop.cancel(reason)` stops it at the next safe point; an
-`AbortSignal` passed to `run()` also works.
+`empty_response`, `no_tool_call`. `loop.cancel(reason)` stops it at the next safe
+point; an `AbortSignal` passed to `run()` also works.
 
 Events (`onEvent`): `step`, `tool_start`, `tool_end`, `tool_error`, `assistant`,
-`notice`, `done`, `error`.
+`notice`, `done`, `error`, plus the resilience events `retry` and `health`.
 
 Guarantees:
 * a tool that throws becomes `Error: …` text appended as the tool result — the
@@ -101,6 +109,7 @@ Load order in `index.html` (after the other renderer scripts):
 
 ```html
 <script src="src/ai-engine/core/protocol.js"></script>
+<script src="src/ai-engine/core/model-adapters.js"></script>
 <script src="src/ai-engine/core/tools.js"></script>
 <script src="src/ai-engine/core/prompt.js"></script>
 <script src="src/ai-engine/core/loop.js"></script>
@@ -110,7 +119,8 @@ Load order in `index.html` (after the other renderer scripts):
 Renderer (`AgentController`):
 1. build the prompt with `CloudAI.prompt.buildSystemPrompt({ root, today, tools:
    CloudAI.tools.TOOL_NAMES, thinkLevel, maxSteps, allowOutsideWorkspace,
-   memoryBlock })`;
+   memoryBlock, model: selectedModelId })` — the `model` parameter is optional
+   and adds the family coaching block;
 2. create a loop with `callModel` = `window.electronAPI.aiChatOnce` (which already
    returns `{content, toolCalls, usedNativeTools, reasoning}`; it may also use
    `CloudAI.protocol.parseToolPayload` directly) and `executeTool` = the existing
@@ -122,23 +132,145 @@ Main process: `ai:chatOnce` can use `CloudAI.protocol.parseToolPayload` /
 `extractNativeToolCalls` / `extractTextToolCalls` (they are pure and safe there);
 nothing else in the engine belongs in the main process.
 
+## Working with different models
+
+The host serves ~20 self-hosted models across six families (Qwen, DeepSeek-R,
+Llama, Mistral, Phi, Gemma) plus at least one image-only model.
+
+**No model on this server supports native tool calling.** Every completion comes
+back with `usedNativeTools: false`, so the `<<<TOOL>>>{"name":…,"args":{…}}<<<END>>>`
+text protocol in `core/protocol.js` is the primary and only working path. The
+`supportsNativeTools` flag on each adapter is kept because a future server may
+expose a tool-capable endpoint; nothing depends on it today.
+
+### The adapter system
+
+`core/model-adapters.js` maps a model id to one adapter object:
+
+```js
+const a = CloudAI.adapters.getAdapter('deepseek-r1-8b');
+a.family;                // 'deepseek-r'
+a.supportsNativeTools;   // false on this server
+a.supportsTextProtocol;  // true
+a.reasoningWrapper;      // 'deepseek-r' | 'qwen' | 'none' — how to strip <think>…
+a.promptStyle;           // family-specific lines added under "## PROTOCOL COACHING"
+a.jsonCautions;          // extra JSON-formatting wording ('' when not needed)
+a.recommendedForAgent;   // false for image-only models and for ≤ ~9B models
+a.smallModel;            // true when the id is ≤ 9B
+a.reasoningModel;        // true for the R1-style reasoning models
+```
+
+Other exports: `detectFamily(modelId)`, `listKnownFamilies()`,
+`isUsableForAgent(modelId)` (false for image-only and for unknown ids),
+`isImageOnly(modelId)`, `stripReasoning(text, wrapperName)`.
+
+Known families: `qwen-coder`, `qwen`, `deepseek-r`, `deepseek`, `llama`,
+`mistral`, `gemma`, `phi`, `unknown`. Note that `qwen-image-2-1` resolves to
+family `qwen` but is flagged `imageOnly`, `supportsTextProtocol: false` and
+`recommendedForAgent: false` — it must never be offered as an agent backend.
+
+### How the host picks an adapter
+
+The host passes the selected model id into the prompt builder; nothing else is
+required:
+
+```js
+const systemPrompt = CloudAI.prompt.buildSystemPrompt({
+  root, tools: CloudAI.tools.TOOL_NAMES, thinkLevel, maxSteps,
+  model: selectedModelId          // or: adapter: CloudAI.adapters.getAdapter(id)
+});
+```
+
+`buildSystemPrompt` stays backwards compatible: with no `model`/`adapter` it
+returns the same base prompt as before, under 7 kB. With one it appends a
+`## PROTOCOL COACHING` block containing the exact protocol, one literal example
+built from the first **enabled** tool, and the family's own lines:
+
+| Family | extra coaching |
+| --- | --- |
+| all text families | repeat the protocol + literal example; `Emit ONE tool block per message. No markdown fences, no comments, no trailing commas, double-quoted keys and strings.`; `Do not answer in prose while a tool is needed; the tool block is the whole reply.` |
+| `deepseek-r` (and any `reasoningModel`) | `Do not narrate your reasoning before the block. Output the tool block as the first thing in your reply.` |
+| `qwen`, `qwen-coder` | `Do not wrap the reply in <think> tags or output the block inside a code fence.` |
+| `llama` | `Never invent a tool name — only the names listed above exist.` |
+| `mistral` | `Never wrap the JSON in a markdown fence and never add [TOOL_CALL] style tags.` |
+| `gemma` | `Never start the reply with a role marker such as "<start_of_turn>model".` |
+| small (≤ 9B) | `Keep replies short; make one tool call per step and finish within a few steps.` |
+| image-only | told the model cannot drive tools and must not emit `<<<TOOL>>>` at all |
+
+When `tools` is supplied the prompt also gains a **capability note** naming the
+enabled tools and saying that everything else is disabled.
+
+To clean a raw completion before it reaches the prompt or the transcript:
+
+```js
+const clean = CloudAI.adapters.stripReasoning(raw, adapter.reasoningWrapper);
+```
+
+DeepSeek-R's `<think>…</think>` and bare `</think>`/`</answer>` variants are
+stripped; Qwen's unterminated `<think>` consumes the remainder (an empty answer
+is better than leaked deliberation). `none` leaves text untouched.
+
+### Adding a family
+
+1. Add one object to `FAMILIES` in `core/model-adapters.js` (`family`, `label`,
+   `imageOnly`, `supportsNativeTools`, `supportsTextProtocol`, `reasoningWrapper`,
+   `promptStyle`, `jsonCautions`, `recommendedForAgent`, `smallModel`,
+   `reasoningModel`).
+2. Add one matching rule to `RULES` (first match wins) and/or an entry in
+   `IMAGE_ONLY_PATTERNS`.
+3. That's it. `prompt.js` reads `promptStyle` / `jsonCautions` generically, so
+   no prompt edit is needed. Add a case to `REASONING_WRAPPERS` only if the
+   family needs a new thinking-channel shape.
+
+### Loop resilience
+
+* **Retry with backoff** — network errors, timeouts, 5xx and 429 are retried up
+  to twice, after 400 ms and 1200 ms (`AgentLoop({ retryDelaysMs })` overrides
+  the schedule, mainly for tests). Each attempt emits a `retry` event
+  (`{ attempt, maxAttempts, delayMs, kind, message, retryable }`) so the UI can
+  say "reconnecting…". Non-transient failures (4xx, protocol problems) are never
+  retried.
+* **Model health** — the `error` event now carries
+  `{ kind: 'transport' | 'http' | 'protocol' | 'cancelled', message, retryable }`,
+  a matching `health` event is emitted, `result.lastError` exposes the same
+  object, and `classifyError(message, aborted)` is exported for hosts that want
+  to classify their own failures.
+* **Protocol nudge** — a model that answers in prose when a tool was clearly
+  needed gets one corrective message naming the exact block to emit, at most
+  twice (`MAX_NUDGES`), after which the loop finishes cleanly with
+  `stopReason: 'no_tool_call'` and an explicit "no files were changed" message
+  instead of looping forever. Enabled by `host.nudgeOnSilentTurns` (after a tool
+  has already run) and/or `requireToolFirstStep` (before any tool has run);
+  both default to off, so today's "assistant answers in prose ⇒ done" behaviour
+  is unchanged by default.
+
+The original event contract is untouched — `step`, `tool_start`, `tool_end`,
+`tool_error`, `assistant`, `notice`, `done` and `error` all behave as before,
+and `maxSteps`, `AbortSignal`/`cancel()`, tool errors returned to the model and
+decoration stripping all still work.
+
 ## Tests
 
 ```
 node src/ai-engine/test/run.js
 ```
 
-Zero dependencies, no framework, plain Node. 257 assertions covering the
+Zero dependencies, no framework, plain Node. 517 assertions covering the
 protocol (native + text, fenced/commented/trailing-comma/truncated payloads,
 both result formats, the ASCII filter), the tools (schema completeness,
 `normalizeArgs` aliases and coercions, `parseLineRange`, `globToRegExp`,
 `resolvePath` sandbox on/off), the prompt (sections, think levels, memory block,
-tool list, < 7 kB) and the loop (event order for both protocols, `maxSteps`,
+tool list, < 7 kB), the loop (event order for both protocols, `maxSteps`,
 tool/model errors, cancellation via `cancel()` and `AbortSignal`, decoration
-filtering, facade).
+filtering, facade), and the model adapters (family detection for every server
+model id, image-only refusal, adapter completeness, reasoning-wrapper stripping,
+family-specific prompt blocks appearing only for the right family, prompt size
+budgets, retry/backoff behaviour and the protocol nudge).
 
 ## How to improve the engine
 
+* **Adding a model family** = one object in `FAMILIES` + one rule in `RULES`
+  (`core/model-adapters.js`). The prompt picks the wording up automatically.
 * **Adding a tool** = one entry in `TOOLS` (`core/tools.js`) + one entry each in
   `TOOL_ICONS` / `TOOL_TITLES` + a line in the `## TOOLS` section of
   `core/prompt.js` + a case in the host's `prepareTool`. Add its aliases to

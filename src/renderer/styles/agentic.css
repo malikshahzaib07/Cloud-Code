@@ -90,6 +90,43 @@
 
 .agent-mini-btn.danger:hover { background: #e53e3e; }
 
+/* Stop requested: the button is inert until the run actually unwinds, so a
+   second click can never double-notify or re-enter requestStop(). */
+.agent-mini-btn.danger:disabled,
+.agent-mini-btn.danger[disabled] {
+  background: #5a3333;
+  border-color: #5a3333;
+  color: #b98c8c;
+  cursor: default;
+  opacity: 0.75;
+}
+
+.agent-mini-btn.danger:disabled:hover,
+.agent-mini-btn.danger[disabled]:hover { background: #5a3333; }
+
+/* While stopping, the status text must not look idle. */
+.agent-run-bar[data-stopping="1"] {
+  background: rgba(194, 60, 60, 0.14);
+}
+
+.agent-run-bar[data-stopping="1"] .agent-run-status {
+  color: #e08585;
+  font-weight: 600;
+}
+
+.agent-run-bar[data-stopping="1"] .agent-run-status::before {
+  content: "⏹ ";
+}
+
+/* A tool call that never ran because the user pressed Stop. */
+.tool-card[data-state="cancelled"] {
+  opacity: 0.65;
+}
+
+.tool-card[data-state="cancelled"] .tool-badge {
+  color: #e08585;
+}
+
 /* ---------- Agent notices & thinking ---------- */
 .agent-notice {
   font-size: 11.5px;

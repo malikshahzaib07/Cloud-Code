@@ -12,6 +12,24 @@
   user-select: text;
   -webkit-user-select: text;
   transition: background-color 0.12s ease, border-color 0.12s ease;
+  /* Enter: fade + 4px rise. transform/opacity only — no layout thrash.
+     Runs once per message node (bodies are re-rendered, never the node). */
+  animation: chat-msg-in 140ms ease-out both;
+}
+
+@keyframes chat-msg-in {
+  from { opacity: 0; transform: translate3d(0, 4px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The live "thinking" line breathes while work is in flight. */
+.msg-typing {
+  animation: chat-think-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-think-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
 }
 
 .chat-msg:hover {
@@ -185,8 +203,7 @@
 .msg-list + .msg-p,
 .msg-quote + .msg-p,
 .msg-code + .msg-p,
-.msg-tablewrap + .msg-p,
-.msg-hr + .msg-p { margin-top: 7px; }
+.msg-tablewrap + .msg-p { margin-top: 7px; }
 
 .msg-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 
@@ -207,11 +224,11 @@
 /* Headings scan as a block: keep the following text visually grouped. */
 .msg-h + .msg-h { margin-top: 8px; }
 
-.msg-hr {
-  border: none;
-  border-top: 1px solid var(--border-subtle, #2b2b2b);
-  margin: 10px 0;
-}
+/* NOTE: there is intentionally NO rule for the old divider class and NO
+   rendered <hr> in the
+   chat. Markdown horizontal rules are dropped by renderMarkdown() — they used
+   to show up as long grey bars with a stray glyph. Where a visual break is
+   genuinely wanted it is a 1px low-contrast border (see .chat-empty). */
 
 .msg-quote {
   margin: 7px 0;
@@ -222,7 +239,6 @@
   border-radius: 0 4px 4px 0;
 }
 .msg-quote .msg-p:last-child { margin-bottom: 0; }
-.msg-quote .msg-hr { margin: 6px 0; }
 
 .msg-body strong, .msg-body b {
   color: var(--text-active, #e6e6e6);
@@ -651,6 +667,15 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Hard stop for the whole chat surface: no motion, no transitions. */
+  #ai-chat-view,
+  #ai-chat-view *,
+  #ai-chat-view *::before,
+  #ai-chat-view *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
   .think-spinner,
   .think-panel.think-live .think-line:last-child .think-text,
   .think-panel.think-live .think-title::after,
@@ -751,6 +776,41 @@ html[data-theme="light"] .chat-cap-item { color: #4a4a4a; }
    ("working") state and the empty state with clickable starter prompts.
    ========================================================================== */
 
+/* --- Panel / overlay show-hide + send button (150ms, opacity/transform) --- */
+
+#ai-chat-view,
+.ai-chat-overlay,
+.chat-panel,
+.chat-footer,
+.chat-busy-hint {
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+#ai-chat-view[hidden],
+.ai-chat-overlay[hidden],
+.chat-panel[hidden] {
+  opacity: 0;
+  transform: translate3d(0, 4px, 0);
+}
+
+#ai-chat-view,
+.ai-chat-overlay,
+.chat-panel { opacity: 1; transform: none; }
+
+#send-msg-btn {
+  transition: background-color 150ms ease, opacity 150ms ease, transform 120ms ease;
+}
+#send-msg-btn:active { transform: scale(0.94); }
+#send-msg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+#send-msg-btn.chat-stop:disabled { opacity: 0.85; cursor: default; }
+
+/* Busy hint slides in instead of popping. */
+.chat-busy-hint { animation: chat-hint-in 150ms ease-out both; }
+@keyframes chat-hint-in {
+  from { opacity: 0; transform: translate3d(0, -3px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
 /* --- Auto-growing textarea (caps at ~8 lines, then scrolls internally) --- */
 
 .chat-footer .chat-input-full {
@@ -822,7 +882,8 @@ html[data-theme="light"] .chat-cap-item { color: #4a4a4a; }
 .chat-empty {
   margin-top: 8px;
   padding-top: 7px;
-  border-top: 1px dashed var(--border-subtle, #dcdcdc);
+  /* 1px low-contrast hairline (never a thick/dashed rule). */
+  border-top: 1px solid var(--border-subtle, #2b2b2b);
 }
 
 .chat-empty-title {

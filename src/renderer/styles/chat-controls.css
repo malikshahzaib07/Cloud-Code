@@ -277,6 +277,243 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
 .dd-mode .dd-trigger { max-width: 118px; }
 .dd-mode .dd-value { font-weight: 500; }
 
+/* ------------------- transient trigger status (model switch) -------------
+   "saving…" → "✓ Saved". While a status is showing it replaces the model id,
+   so the confirmation is unmistakable in a 260px panel. */
+.dd-status {
+  flex: 0 0 auto;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary, #969696);
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+.dd-status[hidden] { display: none; }
+.dd-trigger.dd-has-status .dd-value { display: none; }
+.dd-trigger.dd-has-status { justify-content: space-between; }
+.dd-status-saving { color: var(--text-secondary, #969696); }
+.dd-status-ok { color: var(--cc-ok, #2ea043); }
+.dd-status-warn { color: var(--cc-warn, #cca700); }
+.dd-status-error { color: var(--cc-err, #f14c4c); }
+.dd-status-saving { font-style: italic; }
+
+/* ------------------------------ row badges -------------------------------- */
+/* Family hints in the model list. `coder` = good, `thinking`/`image` = risky. */
+
+.dd-badge {
+  flex: 0 0 auto;
+  max-width: 62px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 13px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  text-transform: lowercase;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.dd-badge-good {
+  color: var(--cc-ok, #2ea043);
+  border-color: color-mix(in srgb, var(--cc-ok, #2ea043) 45%, transparent);
+  background: color-mix(in srgb, var(--cc-ok, #2ea043) 12%, transparent);
+}
+.dd-badge-warn {
+  color: var(--cc-warn, #cca700);
+  border-color: color-mix(in srgb, var(--cc-warn, #cca700) 45%, transparent);
+  background: color-mix(in srgb, var(--cc-warn, #cca700) 12%, transparent);
+}
+.dd-badge-error {
+  color: var(--cc-err, #f14c4c);
+  border-color: color-mix(in srgb, var(--cc-err, #f14c4c) 45%, transparent);
+  background: color-mix(in srgb, var(--cc-err, #f14c4c) 12%, transparent);
+}
+.dd-badge-plain { display: none; }
+
+.dd-item-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.dd-item-disabled:hover {
+  background-color: transparent;
+  color: var(--text-primary, #cccccc);
+}
+
+/* ------------------------- popup action panel ----------------------------- */
+/* Toggle + Test connection + probe result + recovery actions. Sits between
+   the filter box and the list, so it never scrolls out of reach. */
+
+.dd-extras {
+  flex: 0 0 auto;
+  padding: 3px 6px 4px;
+  border-bottom: 1px solid var(--border-subtle, #e0e0e0);
+}
+.dd-extras[hidden] { display: none; }
+
+.dd-extras-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dd-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  line-height: 15px;
+  color: var(--text-secondary, #767676);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.dd-toggle-box {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  accent-color: var(--accent-color, #007acc);
+  cursor: pointer;
+}
+.dd-toggle-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dd-action {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-primary, #cccccc);
+  background: var(--bg-input, #3c3c3c);
+  border: 1px solid var(--border-color, #3e3e42);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.dd-action:hover:not(:disabled) {
+  border-color: var(--accent-color, #007acc);
+  color: var(--accent-color, #007acc);
+}
+.dd-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.dd-action-retry,
+.dd-action-save,
+.dd-action-good,
+.dd-action-coder {
+  background: color-mix(in srgb, var(--accent-color, #007acc) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent-color, #007acc) 40%, transparent);
+  color: var(--accent-color, #007acc);
+}
+.dd-action-good { margin-left: 3px; }
+
+.dd-action[hidden] { display: none; }
+
+.dd-extras-fix {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+.dd-extras-fix[hidden] { display: none; }
+
+.dd-probe {
+  margin-top: 4px;
+  padding: 2px 5px;
+  font-size: 10px;
+  line-height: 14px;
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary, #767676);
+  background: var(--bg-input, #f3f3f3);
+  border: 1px solid var(--border-subtle, #e0e0e0);
+}
+.dd-probe[hidden] { display: none; }
+.dd-probe-good {
+  color: var(--cc-ok, #2ea043);
+  border-color: color-mix(in srgb, var(--cc-ok, #2ea043) 35%, transparent);
+}
+.dd-probe-bad {
+  color: var(--cc-err, #f14c4c);
+  border-color: color-mix(in srgb, var(--cc-err, #f14c4c) 35%, transparent);
+}
+.dd-probe-pending { font-style: italic; }
+
+/* ------------------- control-bar last-error affordance -------------------- */
+
+.cc-model-error {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 18px;
+  color: var(--cc-err, #f14c4c);
+  background: color-mix(in srgb, var(--cc-err, #f14c4c) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cc-err, #f14c4c) 35%, transparent);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.cc-model-error[hidden] { display: none; }
+.cc-model-error-icon { flex: 0 0 auto; }
+.cc-model-error-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-model-error-btn {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--text-primary, #cccccc);
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cc-model-error-btn:hover {
+  color: var(--cc-err, #f14c4c);
+  border-color: var(--cc-err, #f14c4c);
+}
+
+html[data-theme="light"] .dd-badge-warn { color: #8a6d00; }
+html[data-theme="light"] .dd-status-ok { color: #1a7f37; }
+html[data-theme="light"] .dd-status-error,
+html[data-theme="light"] .cc-model-error { color: #c1121f; }
+html[data-theme="light"] .dd-probe { background: #f5f5f5; border-color: #e0e0e0; }
+html[data-theme="light"] .dd-probe-good { color: #1a7f37; }
+html[data-theme="light"] .dd-probe-bad { color: #c1121f; }
+html[data-theme="light"] .dd-action { background: #ffffff; border-color: #c8c8c8; color: #1f1f1f; }
+html[data-theme="light"] .dd-action:hover:not(:disabled) { color: #005fb8; }
+html[data-theme="light"] .cc-model-error-btn { color: #1f1f1f; }
+
 /* Legacy native-select styling, kept for the (hidden) proxy + any old markup */
 .chat-ctl-select {
   height: 22px;
@@ -466,6 +703,8 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
   .dd-menu { max-width: 220px; }
   .dd-list { max-height: 190px; }
   .dd-mode .dd-trigger { max-width: 96px; }
+  .dd-status { max-width: 64px; font-size: 9.5px; }
+  .dd-badge { max-width: 44px; font-size: 8.5px; }
   .chat-control-bar { gap: 3px; padding: 4px 4px 2px; }
 }
 
@@ -476,4 +715,7 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
   .dd-menu { max-width: 200px; }
   .dd-list { max-height: 168px; }
   .dd-foot { font-size: 9.5px; }
+  .dd-extras { padding: 3px 4px 4px; }
+  .dd-action { max-width: 100%; }
+  .cc-model-error { font-size: 9.5px; padding: 0 3px; }
 }

@@ -38,6 +38,10 @@
     const maxSteps = opts.maxSteps || 15;
     const tools = Array.isArray(opts.tools) && opts.tools.length ? opts.tools : null;
 
+    // Family-specific wording. Accepts a model id, or a ready adapter object.
+    const adapter = opts.adapter || (opts.model ? getAdapter(opts.model) : null);
+    const coaching = adapter ? buildCoaching(adapter, tools) : '';
+
     let thinkLine;
     if (thinkLevel === 'off') {
       thinkLine = [
@@ -59,6 +63,15 @@
       : 'Access is limited to this workspace: absolute paths and "../" escapes are rejected.';
 
     const memoryBlock = opts.memoryBlock ? '\n' + String(opts.memoryBlock).trim() + '\n' : '';
+
+    // CAPABILITY NOTE — everything the model can actually do this session.
+    let capabilityNote = '';
+    if (tools) {
+      capabilityNote =
+        '\nEnabled this session (16 total, ' + tools.length + ' on): ' + tools.join(', ') +
+        '\nEvery capability above the ## TOOLS list is DISABLED — there is no other way to read, write or run anything.' +
+        '\nIf a task needs something not in this list, do the closest enabled thing and say what is missing.\n';
+    }
 
     const prompt = `You are Cloud Code Agent, an expert software engineer working inside the user's IDE on the user's own machine.
 
@@ -87,7 +100,7 @@ Deliver the ENTIRE requested feature, end to end, in this single turn — workin
 12. move_files {"files":[{"from":"a","to":"b"}]} | {"path":"logs/*.log","to":"archive/"} — MANY at once, revertible.
 13. run_command {"command":"<powershell command>","timeout_ms":60000} — runs in the workspace root.
 14. read_env {"name":"PATH"} | {"all":true} — environment variables + system summary.
-15. remember {"text":"<durable fact>","tags":["prefs"]} / 16. recall {"query":"...","limit":5} — long-term memory.${tools ? '\nOnly these tools are enabled this session: ' + tools.join(', ') + '\n' : ''}
+15. remember {"text":"<durable fact>","tags":["prefs"]} / 16. recall {"query":"...","limit":5} — long-term memory.${capabilityNote}
 ## FINDING YOUR WAY AROUND
 - Never guess that a file does not exist: find_files by NAME, then search_code by CONTENT, then list_tree.
 - One list_tree call beats a chain of list_dir calls — use it first in an unfamiliar project.
@@ -114,12 +127,11 @@ Deliver the ENTIRE requested feature, end to end, in this single turn — workin
 - PowerShell: Get-ChildItem, Select-String, npm test, git status, git diff. You already start in the workspace root — never cd first.
 - Never run destructive commands (del /s, Remove-Item -Recurse, git reset --hard, git clean) unless explicitly asked.
 
-## OUTPUT STYLE (strict — the user hates decorative output)
-- NO ASCII art, NO bars, NO graphs, NO diagrams, NO box-drawing characters, NO sparklines, NO separator or "graph" lines of any kind ("---", "===", "~~~", "────", "+---+", "████ 60%", "▁▂▃▄▅", "●●●●").
-- Never emit mermaid / dot / graphviz / plantuml / vega diagram blocks — describe the structure in prose or a short markdown list instead.
-- Never echo, paste, quote or narrate the tool transcript: no tool names, no arguments, no JSON, no raw file dumps, no "[tool]" lines. Refer to work in prose ("I updated the parser in agent.js").
-- Wrap code in fenced blocks ONLY when you are actually showing code.
-- Be concise: what changed, where, and how it was verified.
+## OUTPUT STYLE (strict)
+- NO ASCII art, bars, graphs, diagrams, box-drawing, sparklines or separator lines ("---", "===", "~~~", "────", "+---+", "████ 60%", "▁▂▃", "●●●●").
+- No mermaid / dot / graphviz / plantuml / vega blocks — describe structure in prose or a short list.
+- Never echo the tool transcript: no tool names, arguments, JSON, raw file dumps or "[tool]" lines. Refer to work in prose.
+- Fence code only when actually showing code. Be concise: what changed, where, how it was verified.
 
 ## RULES
 - Every mutating action is approved by the user. A rejection is final: do not repeat it — adapt or ask.
@@ -133,12 +145,68 @@ ${thinkLine}
 Reply with a short prose summary: which files changed and why, plus any commands you ran.
 
 ${PROTOCOL_BLOCK}
-
+${coaching}
 Respond in the user's language, but keep code, paths and identifiers exactly as written.`;
     return prompt;
   }
 
-  const api = { buildSystemPrompt };
+  // ==========================================================================
+  // Family-aware protocol coaching
+  // ==========================================================================
+
+  /** Model id or adapter → adapter (null when core/model-adapters.js is absent). */
+  function getAdapter(model) {
+    if (model && typeof model === 'object' && model.family) return model;
+    const M = global.CloudAI && global.CloudAI.adapters;
+    if (M && typeof M.getAdapter === 'function') return M.getAdapter(model);
+    if (typeof require === 'function') {
+      const m = require('./model-adapters.js');
+      global.CloudAI = Object.assign(global.CloudAI || {}, { adapters: m });
+      return m.getAdapter(model);
+    }
+    return null;
+  }
+
+  const STRICT_JSON_LINE =
+    'Emit ONE tool block per message. No markdown fences, no comments, no trailing commas, double-quoted keys and strings.';
+  const SILENT_LINE =
+    'Do not answer in prose while a tool is needed; the tool block is the whole reply.';
+
+  /**
+   * buildCoaching(adapter, tools) → the "## PROTOCOL COACHING" block, or ''.
+   * Only families that need it get lines; every family repeats the exact
+   * protocol with one literal example, because none of them has native tools.
+   */
+  function buildCoaching(adapter, tools) {
+    const a = adapter || {};
+    if (!a.supportsTextProtocol) {
+      return '\n## PROTOCOL COACHING\nThis model cannot drive tools on this server. Answer in prose only; do not emit <<<TOOL>>>.\n';
+    }
+
+    const lines = [];
+    const exampleTool = (tools && tools.length) ? tools[0] : 'list_dir';
+    lines.push('## PROTOCOL COACHING (this model has no native function calling)');
+    lines.push('To use a tool, reply with EXACTLY this and nothing else in the block:');
+    lines.push('<<<TOOL>>>');
+    lines.push('{"name":"' + exampleTool + '","args":{"path":"."}}');
+    lines.push('<<<END>>>');
+    lines.push(STRICT_JSON_LINE);
+    if (tools && tools.length) {
+      lines.push('Valid tool names: ' + tools.join(', ') + '. Never invent another name.');
+    }
+    if (a.jsonCautions) lines.push(a.jsonCautions);
+    // Family quirks live in the adapter, so adding a family needs no prompt edit.
+    for (const line of a.promptStyle || []) {
+      if (line && lines.indexOf(line) === -1) lines.push(line);
+    }
+    lines.push(SILENT_LINE);
+    if (a.smallModel) {
+      lines.push('Keep replies short; make one tool call per step and finish within a few steps.');
+    }
+    return '\n' + lines.join('\n') + '\n';
+  }
+
+  const api = { buildSystemPrompt, buildCoaching, getAdapter };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.CloudAI = Object.assign(global.CloudAI || {}, { prompt: api });

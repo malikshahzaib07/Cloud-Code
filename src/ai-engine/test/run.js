@@ -38,10 +38,22 @@ function throws(fn, label) {
   ok(threw, label);
 }
 
-/** Print the summary and set the process exit code. Idempotent. */
+/**
+ * Print the summary and set the process exit code.
+ * Idempotent, and only fires once every registered suite has called it — so a
+ * suite that finishes synchronously does not truncate a later one.
+ */
 let finished = false;
+let pending = 0;
+function suite() {
+  pending++;
+}
 function finish() {
   if (finished) return;
+  if (pending > 0) {
+    pending--;
+    if (pending > 0) return;
+  }
   finished = true;
   const passed = summary();
   process.exitCode = passed ? 0 : 1;
@@ -64,7 +76,10 @@ function summary() {
   return results.failed === 0;
 }
 
-module.exports = { group, ok, eq, throws, summary, finish, results };
+module.exports = { group, ok, eq, throws, summary, suite, finish, results };
 
-// The suite is required last: it registers and runs every assertion, then calls finish().
+// The suites are required last: each registers and runs its assertions, then calls finish().
+suite();
 require('./engine.test.js');
+suite();
+require('./adapters.test.js');
