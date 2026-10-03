@@ -1,28 +1,67 @@
 /* ==========================================================================
    Cloud Code — Chat control bar styles (mode toggle row, model/thinking
-   selects, attach button and attachment chips). Survives a ~300px panel.
+   selects, attach button and attachment chips). Survives a ~260px panel.
    ========================================================================== */
 
 .chat-control-bar {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
-  padding: 4px 6px 2px;
+  padding: 6px 8px;
   background: var(--bg-sidebar, #252526);
   border-top: 1px solid var(--border-subtle, #2b2b2b);
 }
 
-/* Slight density tweak only — .mode-toggle / .mode-btn live in agentic.css. */
-.chat-control-bar .mode-btn {
-  font-size: 10.5px;
-  padding: 3px 8px;
+/* The spacer forced the three dropdowns into one cramped line; wrapping
+   gives each control room to breathe instead. */
+.chat-control-bar .chat-ctl-spacer {
+  display: none;
 }
 
-.chat-ctl-spacer {
-  flex: 1;
-  min-width: 0;
+/* ---------------- Chat / Agent segmented pill ----------------------------- */
+.chat-control-bar .mode-toggle {
+  flex: 0 0 auto;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border-color, #3e3e42);
+  border-radius: 999px;
+  background: var(--bg-input, #3c3c3c);
+  overflow: visible;
+}
+
+.chat-control-bar .mode-toggle .mode-btn {
+  padding: 2px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--text-secondary, #969696);
+  background: transparent;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.chat-control-bar .mode-toggle .mode-btn:hover {
+  color: var(--text-primary, #cccccc);
+  background: var(--cc-control-hover, rgba(255, 255, 255, 0.06));
+}
+
+.chat-control-bar .mode-toggle .mode-btn.active {
+  background: var(--accent-color, #007acc);
+  color: #ffffff;
+}
+
+html[data-theme="light"] .chat-control-bar .mode-toggle {
+  background: var(--cc-control-bg, #f3f3f3);
+  border-color: var(--border-color, #d4d4d4);
+}
+
+html[data-theme="light"] .chat-control-bar .mode-toggle .mode-btn:hover {
+  background: var(--cc-control-hover, #e5e5e5);
+  color: var(--text-primary, #1f1f1f);
 }
 
 /* ---------------------------- hidden proxies ----------------------------- */
@@ -42,49 +81,68 @@
 }
 
 /* ------------------------------- dropdowns ------------------------------- */
-/* Designed for a ~260px panel: the trigger flexes, the popup is absolutely
-   positioned so it is never clipped by the narrow bar. */
+/* ~260px panel: the row wraps. Thinking level and autonomy keep auto width
+   (labels are short and fit); the model dropdown takes all remaining width
+   so its label is no longer truncated to "qwable-9b-c…". */
 
 .dd {
   position: relative;
   display: inline-flex;
   min-width: 0;
-  max-width: 132px;
+  max-width: 100%;
   flex: 0 1 auto;
+}
+
+.dd-think {
+  flex: 0 0 auto;
+}
+
+.dd-agentmode,
+.dd-mode {
+  flex: 0 1 auto;
+}
+
+.dd-model {
+  flex: 1 1 130px;
+  min-width: 96px;
 }
 
 .dd-trigger {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 5px;
   width: 100%;
   min-width: 0;
-  height: 22px;
-  max-height: 22px;
-  padding: 0 4px 0 6px;
-  font-size: 11px;
-  line-height: 20px;
+  height: 26px;
+  max-height: 26px;
+  padding: 0 8px 0 10px;
+  font-size: 11.5px;
+  line-height: 24px;
   font-family: inherit;
   text-align: left;
   color: var(--text-primary, #cccccc);
   background-color: var(--bg-input, #3c3c3c);
   border: 1px solid var(--border-color, #3e3e42);
-  border-radius: 3px;
+  border-radius: 6px;
   cursor: pointer;
   outline: none;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .dd-trigger:hover {
   background-color: var(--bg-activity, #333333);
-  border-color: var(--accent-color, #007acc);
+  border-color: color-mix(in srgb, var(--accent-color, #007acc) 55%, var(--border-color, #3e3e42));
 }
 
-.dd-trigger:focus-visible,
+.dd-trigger:focus-visible {
+  border-color: var(--accent-color, #007acc);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color, #007acc) 45%, transparent);
+}
+
 .dd-trigger.dd-open {
   border-color: var(--accent-color, #007acc);
-  outline: 1px solid var(--accent-color, #007acc);
-  outline-offset: -1px;
+  background-color: var(--bg-activity, #333333);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color, #007acc) 35%, transparent);
 }
 
 .dd-trigger.dd-disabled,
@@ -111,13 +169,32 @@
 
 .dd-caret {
   flex: 0 0 auto;
-  opacity: 0.7;
+  opacity: 0.65;
   pointer-events: none;
-  transition: transform 0.12s ease;
+  transition: transform 0.15s ease, opacity 0.15s ease;
 }
+
+.dd-trigger:hover .dd-caret { opacity: 1; }
 
 .dd-trigger.dd-open .dd-caret {
   transform: rotate(180deg);
+  opacity: 1;
+}
+
+html[data-theme="light"] .dd-trigger {
+  background-color: var(--cc-control-bg, #ffffff);
+  border-color: var(--border-color, #d4d4d4);
+  color: var(--text-primary, #1f1f1f);
+}
+
+html[data-theme="light"] .dd-trigger:hover {
+  background-color: var(--cc-control-hover, #ededed);
+  border-color: color-mix(in srgb, var(--accent-color, #007acc) 45%, var(--border-color, #d4d4d4));
+}
+
+html[data-theme="light"] .dd-trigger.dd-open {
+  background-color: var(--cc-control-hover, #ededed);
+  border-color: var(--accent-color, #007acc);
 }
 
 /* ------------------------------- popup ---------------------------------- */
@@ -127,19 +204,30 @@
 .dd-menu {
   position: absolute;
   z-index: 40;
-  bottom: calc(100% + 3px);
+  bottom: calc(100% + 5px);
   left: 0;
   min-width: 100%;
-  max-width: 250px;
-  padding: 2px 0;
+  max-width: 260px;
+  padding: 4px;
   background: var(--bg-sidebar, #252526);
   border: 1px solid var(--border-color, #3e3e42);
-  border-radius: 4px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.38);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.25);
   text-align: left;
   cursor: default;
   display: flex;
   flex-direction: column;
+  transform-origin: bottom left;
+  animation: dd-pop 0.14s ease-out;
+}
+
+@keyframes dd-pop {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.dd-menu[hidden] {
+  display: none;
 }
 
 .dd-list {
@@ -154,16 +242,17 @@
 .dd-search {
   flex: 0 0 auto;
   width: calc(100% - 12px);
-  margin: 4px 6px 3px;
-  padding: 4px 7px;
+  margin: 4px 6px 4px;
+  padding: 5px 8px;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 11.5px;
   line-height: 15px;
-  color: var(--text-primary, #1f1f1f);
-  background: var(--bg-input, #ffffff);
-  border: 1px solid var(--border-color, #d4d4d4);
-  border-radius: 3px;
+  color: var(--text-primary, #cccccc);
+  background: var(--bg-input, #3c3c3c);
+  border: 1px solid var(--border-color, #3e3e42);
+  border-radius: 5px;
   outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .dd-search::placeholder { color: var(--text-muted, #8a8a8a); }
@@ -176,11 +265,12 @@
 /* "showing X of Y" footer — proves the list was not silently truncated */
 .dd-foot {
   flex: 0 0 auto;
-  padding: 3px 8px;
-  border-top: 1px solid var(--border-subtle, #e0e0e0);
+  padding: 4px 8px 3px;
+  border-top: 1px solid var(--border-subtle, #2b2b2b);
+  margin-top: 2px;
   font-size: 10px;
   line-height: 13px;
-  color: var(--text-secondary, #767676);
+  color: var(--text-secondary, #969696);
   font-variant-numeric: tabular-nums;
   user-select: none;
   -webkit-user-select: none;
@@ -190,56 +280,22 @@
 
 /* Nothing matches the filter (popup still renders something useful) */
 .dd-empty-row {
-  padding: 6px 10px;
+  padding: 8px 10px;
   font-size: 11px;
-  color: var(--text-secondary, #767676);
+  color: var(--text-secondary, #969696);
   font-style: italic;
   overflow-wrap: anywhere;
-}
-
-html[data-theme="light"] .dd-menu {
-  background: var(--cc-control-bg, #ffffff);
-  border-color: var(--border-color, #d4d4d4);
-  box-shadow: var(--cc-shadow, 0 6px 18px rgba(0, 0, 0, 0.16));
-}
-
-html[data-theme="light"] .dd-item:hover,
-html[data-theme="light"] .dd-item.dd-item-active {
-  background-color: var(--cc-control-hover, #ededed);
-  color: var(--text-primary, #1f1f1f);
-}
-
-html[data-theme="light"] .dd-item[aria-selected="true"] {
-  color: var(--text-primary, #1f1f1f);
-}
-
-html[data-theme="light"] .dd-check { color: var(--accent-color, #007acc); }
-
-html[data-theme="light"] .dd-search {
-  background: #ffffff;
-  color: var(--text-primary, #1f1f1f);
-  border-color: #c8c8c8;
-}
-
-html[data-theme="light"] .dd-foot {
-  border-top-color: #e0e0e0;
-  color: #767676;
-}
-
-html[data-theme="light"] .dd-empty-row { color: #767676; }
-
-.dd-menu[hidden] {
-  display: none;
 }
 
 .dd-item {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px 3px 4px;
-  font-size: 11px;
+  gap: 6px;
+  padding: 5px 8px 5px 6px;
+  font-size: 11.5px;
   line-height: 16px;
   color: var(--text-primary, #cccccc);
+  border-radius: 5px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -252,7 +308,7 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
 }
 
 .dd-item[aria-selected="true"] {
-  color: var(--text-active, #ffffff);
+  color: var(--accent-color, #007acc);
   font-weight: 600;
 }
 
@@ -272,9 +328,39 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
   white-space: nowrap;
 }
 
-/* The autonomy-mode dropdown has no proxy <select>; give it a stable width so
-   the bar does not reflow between "Ask before changes" and "Fully auto". */
-.dd-mode .dd-trigger { max-width: 118px; }
+html[data-theme="light"] .dd-menu {
+  background: var(--cc-control-bg, #ffffff);
+  border-color: var(--border-color, #d4d4d4);
+  box-shadow: var(--cc-shadow, 0 10px 28px rgba(0, 0, 0, 0.14));
+}
+
+html[data-theme="light"] .dd-item:hover,
+html[data-theme="light"] .dd-item.dd-item-active {
+  background-color: var(--cc-control-hover, #ededed);
+  color: var(--text-primary, #1f1f1f);
+}
+
+html[data-theme="light"] .dd-item[aria-selected="true"] {
+  color: var(--accent-color, #007acc);
+}
+
+html[data-theme="light"] .dd-check { color: var(--accent-color, #007acc); }
+
+html[data-theme="light"] .dd-search {
+  background: #ffffff;
+  color: var(--text-primary, #1f1f1f);
+  border-color: #c8c8c8;
+}
+
+html[data-theme="light"] .dd-foot {
+  border-top-color: #e0e0e0;
+  color: #767676;
+}
+
+html[data-theme="light"] .dd-empty-row { color: #767676; }
+
+/* The autonomy-mode dropdown has no proxy <select>; give it a sensible width
+   so the bar does not reflow between "Ask before changes" and "Fully auto". */
 .dd-mode .dd-value { font-weight: 500; }
 
 /* ------------------- transient trigger status (model switch) -------------
@@ -298,11 +384,10 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
 .dd-status[hidden] { display: none; }
 .dd-trigger.dd-has-status .dd-value { display: none; }
 .dd-trigger.dd-has-status { justify-content: space-between; }
-.dd-status-saving { color: var(--text-secondary, #969696); }
+.dd-status-saving { color: var(--text-secondary, #969696); font-style: italic; }
 .dd-status-ok { color: var(--cc-ok, #2ea043); }
 .dd-status-warn { color: var(--cc-warn, #cca700); }
 .dd-status-error { color: var(--cc-err, #f14c4c); }
-.dd-status-saving { font-style: italic; }
 
 /* ------------------------------ row badges -------------------------------- */
 /* Family hints in the model list. `coder` = good, `thinking`/`image` = risky. */
@@ -313,10 +398,10 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0 4px;
+  padding: 1px 6px;
   font-size: 9px;
   line-height: 13px;
-  border-radius: 7px;
+  border-radius: 999px;
   border: 1px solid transparent;
   text-transform: lowercase;
   user-select: none;
@@ -354,15 +439,15 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
 
 .dd-extras {
   flex: 0 0 auto;
-  padding: 3px 6px 4px;
-  border-bottom: 1px solid var(--border-subtle, #e0e0e0);
+  padding: 4px 6px 5px;
+  border-bottom: 1px solid var(--border-subtle, #2b2b2b);
 }
 .dd-extras[hidden] { display: none; }
 
 .dd-extras-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -371,18 +456,18 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-size: 10.5px;
   line-height: 15px;
-  color: var(--text-secondary, #767676);
+  color: var(--text-secondary, #969696);
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
 }
 .dd-toggle-box {
   flex: 0 0 auto;
-  width: 11px;
-  height: 11px;
+  width: 12px;
+  height: 12px;
   margin: 0;
   accent-color: var(--accent-color, #007acc);
   cursor: pointer;
@@ -400,15 +485,16 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 2px 6px;
+  padding: 3px 8px;
   font-family: inherit;
-  font-size: 10px;
-  line-height: 14px;
+  font-size: 10.5px;
+  line-height: 15px;
   color: var(--text-primary, #cccccc);
   background: var(--bg-input, #3c3c3c);
   border: 1px solid var(--border-color, #3e3e42);
-  border-radius: 3px;
+  border-radius: 5px;
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
 }
 .dd-action:hover:not(:disabled) {
   border-color: var(--accent-color, #007acc);
@@ -426,28 +512,27 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
   border-color: color-mix(in srgb, var(--accent-color, #007acc) 40%, transparent);
   color: var(--accent-color, #007acc);
 }
-.dd-action-good { margin-left: 3px; }
 
 .dd-action[hidden] { display: none; }
 
 .dd-extras-fix {
   display: flex;
   flex-wrap: wrap;
-  gap: 3px;
-  margin-top: 4px;
+  gap: 4px;
+  margin-top: 5px;
 }
 .dd-extras-fix[hidden] { display: none; }
 
 .dd-probe {
-  margin-top: 4px;
-  padding: 2px 5px;
+  margin-top: 5px;
+  padding: 3px 6px;
   font-size: 10px;
   line-height: 14px;
-  border-radius: 3px;
+  border-radius: 5px;
   overflow-wrap: anywhere;
-  color: var(--text-secondary, #767676);
-  background: var(--bg-input, #f3f3f3);
-  border: 1px solid var(--border-subtle, #e0e0e0);
+  color: var(--text-secondary, #969696);
+  background: var(--bg-input, #3c3c3c);
+  border: 1px solid var(--border-subtle, #2b2b2b);
 }
 .dd-probe[hidden] { display: none; }
 .dd-probe-good {
@@ -467,14 +552,14 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 0 4px;
+  gap: 4px;
+  padding: 2px 6px;
   font-size: 10px;
   line-height: 18px;
   color: var(--cc-err, #f14c4c);
   background: color-mix(in srgb, var(--cc-err, #f14c4c) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--cc-err, #f14c4c) 35%, transparent);
-  border-radius: 3px;
+  border-radius: 6px;
   overflow: hidden;
 }
 .cc-model-error[hidden] { display: none; }
@@ -488,14 +573,14 @@ html[data-theme="light"] .dd-empty-row { color: #767676; }
 }
 .cc-model-error-btn {
   flex: 0 0 auto;
-  padding: 0 5px;
+  padding: 0 6px;
   font-family: inherit;
   font-size: 10px;
   line-height: 16px;
   color: var(--text-primary, #cccccc);
   background: transparent;
   border: 1px solid currentColor;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
 }
 .cc-model-error-btn:hover {
@@ -513,22 +598,23 @@ html[data-theme="light"] .dd-probe-bad { color: #c1121f; }
 html[data-theme="light"] .dd-action { background: #ffffff; border-color: #c8c8c8; color: #1f1f1f; }
 html[data-theme="light"] .dd-action:hover:not(:disabled) { color: #005fb8; }
 html[data-theme="light"] .cc-model-error-btn { color: #1f1f1f; }
+html[data-theme="light"] .dd-extras { border-bottom-color: #e0e0e0; }
 
 /* Legacy native-select styling, kept for the (hidden) proxy + any old markup */
 .chat-ctl-select {
-  height: 22px;
-  max-height: 22px;
+  height: 26px;
+  max-height: 26px;
   min-width: 0;
   max-width: 130px;
   flex: 0 1 auto;
-  padding: 0 4px;
+  padding: 0 6px;
   font-size: 11px;
-  line-height: 20px;
+  line-height: 24px;
   font-family: inherit;
   color: var(--text-primary, #cccccc);
   background-color: var(--bg-input, #3c3c3c);
   border: 1px solid var(--border-color, #3e3e42);
-  border-radius: 3px;
+  border-radius: 6px;
   cursor: pointer;
   user-select: text;
   text-overflow: ellipsis;
@@ -550,29 +636,29 @@ html[data-theme="light"] .cc-model-error-btn { color: #1f1f1f; }
 /* ------------------------------ buttons --------------------------------- */
 
 .chat-ctl-btn {
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
-  min-width: 22px;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  min-width: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   color: var(--text-secondary, #969696);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 3px;
+  background: var(--bg-input, transparent);
+  border: 1px solid var(--border-color, transparent);
+  border-radius: 6px;
   cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .chat-ctl-btn:hover {
   color: var(--text-primary, #cccccc);
   background: var(--bg-activity, #333333);
-  border-color: var(--border-color, #3e3e42);
+  border-color: color-mix(in srgb, var(--accent-color, #007acc) 45%, var(--border-color, #3e3e42));
 }
 
 .chat-ctl-btn:active {
-  background: var(--bg-input, #3c3c3c);
   color: var(--text-active, #ffffff);
 }
 
@@ -583,20 +669,31 @@ html[data-theme="light"] .cc-model-error-btn { color: #1f1f1f; }
   pointer-events: none;
 }
 
+html[data-theme="light"] .chat-ctl-btn {
+  background: var(--cc-control-bg, #ffffff);
+  border-color: var(--border-color, #d4d4d4);
+  color: var(--text-secondary, #616161);
+}
+
+html[data-theme="light"] .chat-ctl-btn:hover {
+  background: var(--cc-control-hover, #ededed);
+  color: var(--text-primary, #1f1f1f);
+}
+
 /* --------------------------- attachment chips ---------------------------- */
 
 .attach-count {
   flex: 0 0 auto;
   align-self: center;
   margin-right: 2px;
-  padding: 1px 6px;
+  padding: 1px 7px;
   font-size: 10px;
   line-height: 15px;
   font-weight: 600;
   color: var(--accent-color, #007acc);
   background: color-mix(in srgb, var(--accent-color, #007acc) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-color, #007acc) 35%, transparent);
-  border-radius: 8px;
+  border-radius: 999px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   user-select: none;
@@ -612,7 +709,7 @@ html[data-theme="light"] .cc-model-error-btn { color: #1f1f1f; }
   max-height: 64px;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 3px 6px;
+  padding: 4px 8px;
   background: var(--bg-sidebar, #252526);
   border-top: 1px solid var(--border-subtle, #2b2b2b);
 }
@@ -624,17 +721,18 @@ html[data-theme="light"] .cc-model-error-btn { color: #1f1f1f; }
 .attach-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   max-width: 100%;
   min-width: 0;
-  height: 20px;
-  padding: 0 2px 0 7px;
+  height: 21px;
+  padding: 0 3px 0 8px;
   font-size: 11px;
   line-height: 20px;
   color: var(--text-primary, #cccccc);
   background: var(--bg-input, #3c3c3c);
   border: 1px solid var(--border-color, #3e3e42);
-  border-radius: 10px;
+  border-radius: 999px;
+  transition: border-color 0.15s ease;
 }
 
 .attach-chip:hover {
@@ -659,8 +757,8 @@ html[data-theme="light"] .cc-model-error-btn { color: #1f1f1f; }
 
 .attach-chip-remove {
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -675,7 +773,7 @@ html[data-theme="light"] .cc-model-error-btn { color: #1f1f1f; }
 }
 
 .attach-chip-remove:hover {
-  color: var(--text-active, #ffffff);
+  color: #ffffff;
   background: var(--accent-color, #007acc);
 }
 
@@ -698,24 +796,33 @@ html[data-theme="light"] .cc-model-error-btn { color: #1f1f1f; }
 /* -------------------------- narrow panel (~260px) ------------------------ */
 
 @media (max-width: 320px) {
-  .dd { max-width: 108px; }
-  .dd-trigger { font-size: 10.5px; padding: 0 3px 0 5px; }
-  .dd-menu { max-width: 220px; }
+  .dd-trigger { font-size: 11px; padding: 0 6px 0 8px; }
+  .dd-menu { max-width: 230px; }
   .dd-list { max-height: 190px; }
-  .dd-mode .dd-trigger { max-width: 96px; }
   .dd-status { max-width: 64px; font-size: 9.5px; }
-  .dd-badge { max-width: 44px; font-size: 8.5px; }
-  .chat-control-bar { gap: 3px; padding: 4px 4px 2px; }
+  .dd-badge { max-width: 48px; font-size: 8.5px; }
+  .chat-control-bar { gap: 4px; padding: 5px 6px; }
 }
 
 @media (max-width: 280px) {
-  /* Icons-only affordances for the two dropdowns; the tooltip carries meaning */
-  .dd { max-width: 74px; }
-  .dd-value { font-size: 10px; }
+  .dd-value { font-size: 10.5px; }
   .dd-menu { max-width: 200px; }
   .dd-list { max-height: 168px; }
   .dd-foot { font-size: 9.5px; }
   .dd-extras { padding: 3px 4px 4px; }
   .dd-action { max-width: 100%; }
-  .cc-model-error { font-size: 9.5px; padding: 0 3px; }
+  .cc-model-error { font-size: 9.5px; padding: 1px 4px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dd-menu { animation: none; }
+  .dd-caret,
+  .dd-trigger,
+  .dd-search,
+  .dd-action,
+  .chat-ctl-btn,
+  .chat-control-bar .mode-toggle .mode-btn,
+  .attach-chip {
+    transition: none;
+  }
 }

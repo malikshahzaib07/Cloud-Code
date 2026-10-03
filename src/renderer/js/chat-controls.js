@@ -297,6 +297,9 @@
     var root = document.createElement('div');
     root.className = 'dd';
     if (dd.searchable) root.classList.add('dd-searchable');
+    // Per-dropdown hook for width policy (.dd-model flexes, .dd-think and
+    // .dd-agentmode size to their label).
+    if (opts.key) root.classList.add('dd-' + opts.key);
 
     var trigger = document.createElement('button');
     trigger.type = 'button';

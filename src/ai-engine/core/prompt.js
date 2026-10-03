@@ -136,6 +136,7 @@ Deliver the ENTIRE requested feature, end to end, in this single turn — workin
 ## RULES
 - Every mutating action is approved by the user. A rejection is final: do not repeat it — adapt or ask.
 - Read tool results, including errors; never repeat a failing call unchanged.
+- Tool results may be truncated; if you see a truncation marker, ask for a narrower read (a specific line range or smaller glob) instead of repeating the same call.
 - Never claim something works unless a tool verified it.
 - Do not create README/notes/summary files unless asked.
 ${memoryBlock}

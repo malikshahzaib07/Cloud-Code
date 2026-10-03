@@ -391,7 +391,7 @@ group('loop — scripted 2-tool run');
   ], 'event order');
 
   eq(res.steps, 3, 'three steps');
-  eq(res.stopReason, 'done', 'stopReason done');
+  eq(res.stopReason, 'completed', 'stopReason completed');
   ok(res.ok, 'ok true');
   eq(res.finalText, 'All done.', 'final assistant text');
 
@@ -456,7 +456,7 @@ group('loop — scripted 2-tool run');
     ok(ev.some((e) => e.type === 'tool_error' && /ENOENT/.test(e.message)), 'tool_error event');
     const toolMsg = r4.messages.find((m) => m.role === 'tool');
     ok(toolMsg && /Error: ENOENT/.test(toolMsg.content), 'error returned to the model as tool output');
-    eq(r4.stopReason, 'done', 'loop survived the tool error');
+    eq(r4.stopReason, 'completed', 'loop survived the tool error');
     eq(r4.finalText, 'Recovered.', 'final answer after the error');
   }
 

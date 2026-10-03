@@ -19,6 +19,7 @@ src/ai-engine/
 │   ├── model-adapters.js per-family model adapters (family, prompt style, JSON cautions)
 │   ├── tools.js          tool schemas + argument normalisation + path sandbox
 │   ├── prompt.js         system prompt builder (family-aware)
+│   ├── context.js        context budget manager (trims old tool results)
 │   └── loop.js           AgentLoop — the tool loop
 └── test/
     ├── run.js            zero-dependency harness + entry point
@@ -34,7 +35,8 @@ src/ai-engine/
 | `core/model-adapters.js` | `detectFamily`, `getAdapter`, `listKnownFamilies`, `isUsableForAgent`, `stripReasoning` — what a given model id can and cannot do | completions, prompting |
 | `core/tools.js` | the 16 OpenAI function schemas (`TOOLS`), `TOOL_ICONS` / `TOOL_TITLES`, `normalizeArgs` (alias + stringly-typed coercion + nested `arguments`), `parseLineRange`, `globToRegExp`, `resolvePath` sandbox | executing tools, rendering cards |
 | `core/prompt.js` | `buildSystemPrompt({root, today, tools, thinkLevel, maxSteps, allowOutsideWorkspace, memoryBlock})` | reading settings or memory itself |
-| `core/loop.js` | `AgentLoop` — control flow, step cap, cancellation, per-tool error containment, event emission | the model client, tool implementations, the DOM |
+| `core/context.js` | `trimMessages`, `measureMessages`, token estimate — clips old tool results when the transcript exceeds the budget | sending prompts, rendering |
+| `core/loop.js` | `AgentLoop` — control flow, step cap, cancellation, per-tool error containment, context trim, per-tool result caps, event emission | the model client, tool implementations, the DOM |
 
 ## Public API
 
@@ -72,12 +74,13 @@ const loop = new CloudAI.AgentLoop({
 
 const result = await loop.run({ messages, systemPrompt });
 // { ok, steps, stopReason, cancelled, finalText, messages, error,
-//   lastError, nudges, retries }
+//   lastError, nudges, retries, trimmed }
 ```
 
-`stopReason` is one of `done`, `cancelled`, `max_steps`, `model_error`,
+`stopReason` is one of `completed`, `cancelled`, `max_steps`, `model_error`,
 `empty_response`, `no_tool_call`. `loop.cancel(reason)` stops it at the next safe
-point; an `AbortSignal` passed to `run()` also works.
+point; an `AbortSignal` passed to `run()` also works. The result also carries
+`trimmed` — how many old tool results the context budget manager clipped.
 
 Events (`onEvent`): `step`, `tool_start`, `tool_end`, `tool_error`, `assistant`,
 `notice`, `done`, `error`, plus the resilience events `retry` and `health`.
@@ -112,6 +115,7 @@ Load order in `index.html` (after the other renderer scripts):
 <script src="src/ai-engine/core/model-adapters.js"></script>
 <script src="src/ai-engine/core/tools.js"></script>
 <script src="src/ai-engine/core/prompt.js"></script>
+<script src="src/ai-engine/core/context.js"></script>
 <script src="src/ai-engine/core/loop.js"></script>
 <script src="src/ai-engine/index.js"></script>
 ```
@@ -255,7 +259,7 @@ decoration stripping all still work.
 node src/ai-engine/test/run.js
 ```
 
-Zero dependencies, no framework, plain Node. 517 assertions covering the
+Zero dependencies, no framework, plain Node. 600 assertions covering the
 protocol (native + text, fenced/commented/trailing-comma/truncated payloads,
 both result formats, the ASCII filter), the tools (schema completeness,
 `normalizeArgs` aliases and coercions, `parseLineRange`, `globToRegExp`,

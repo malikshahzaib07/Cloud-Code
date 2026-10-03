@@ -272,6 +272,69 @@ const TOOLS = [
 /** Tool names, in schema order — handy for prompts and error messages. */
 const TOOL_NAMES = TOOLS.map((t) => t.function.name);
 
+/**
+ * Per-tool cap on the size of a result the loop feeds back to the model.
+ * A huge tool output can never blow the context budget; it is clipped
+ * (with a marker) before it enters the transcript.
+ */
+const MAX_RESULT_BYTES = {
+  list_dir: 16 * 1024,
+  read_file: 64 * 1024,
+  list_tree: 32 * 1024,
+  find_files: 32 * 1024,
+  search_code: 32 * 1024,
+  edit_file: 8 * 1024,
+  write_file: 8 * 1024,
+  delete_file: 4 * 1024,
+  move_file: 4 * 1024,
+  run_command: 32 * 1024,
+  read_files: 64 * 1024,
+  delete_files: 8 * 1024,
+  move_files: 8 * 1024,
+  read_env: 16 * 1024,
+  remember: 4 * 1024,
+  recall: 16 * 1024
+};
+
+// Also hang the limit on each schema so a host can read it off the tool.
+for (const t of TOOLS) {
+  const n = t.function && t.function.name;
+  if (n && MAX_RESULT_BYTES[n] !== undefined) t.function.maxResultBytes = MAX_RESULT_BYTES[n];
+}
+
+/** Byte length that works in Node and in the browser (no deps). */
+function byteLength(s) {
+  try {
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(s).length;
+  } catch (e) { /* fall through */ }
+  try {
+    // classic UTF-8 byte-length trick
+    return unescape(encodeURIComponent(s)).length;
+  } catch (e2) {
+    return String(s).length;
+  }
+}
+
+/**
+ * truncateResult(toolName, result)
+ * Clip a tool output to the tool's maxResultBytes budget. Always returns a
+ * string; adds a marker naming how much was dropped. Unknown tools fall
+ * back to 32 KB.
+ */
+function truncateResult(toolName, result) {
+  const s = result == null ? '' : String(result);
+  const max = MAX_RESULT_BYTES[toolName] !== undefined ? MAX_RESULT_BYTES[toolName] : 32 * 1024;
+  if (byteLength(s) <= max) return s;
+  let cut = s.slice(0, max);
+  // Multi-byte characters can push the estimate over the limit — shrink.
+  let guard = 0;
+  while (byteLength(cut) > max && cut.length > 0 && guard++ < 12) {
+    cut = cut.slice(0, Math.floor(cut.length * 0.85));
+  }
+  const omitted = byteLength(s) - byteLength(cut);
+  return cut + '\n…(truncated — ' + omitted + ' bytes omitted)';
+}
+
 /** Tools that never mutate the workspace, so they never need the approval gate. */
 const READONLY_TOOLS = new Set([
   'list_dir', 'list_tree', 'find_files', 'read_file', 'read_files', 'search_code', 'read_env', 'recall'
@@ -603,6 +666,8 @@ const api = {
   TOOL_TITLES,
   READONLY_TOOLS,
   NOISE_DIRS,
+  MAX_RESULT_BYTES,
+  truncateResult,
   normalizeArgs,
   parseLineRange,
   globToRegExp,

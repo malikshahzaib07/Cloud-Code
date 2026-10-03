@@ -121,6 +121,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   const emptyOpenFolderBtn = document.getElementById('empty-open-folder-btn');
   if (emptyOpenFolderBtn) emptyOpenFolderBtn.onclick = () => window.explorer.openFolder();
 
+  // Remaining empty-state quick actions (markup built by EditorManager).
+  const emptyNewFileBtn = document.getElementById('empty-new-file-btn');
+  if (emptyNewFileBtn) {
+    emptyNewFileBtn.onclick = () => {
+      // With no folder open there is nowhere to put the file — open one first.
+      if (window.explorer && window.explorer.rootPath) window.explorer.createNewFile();
+      else if (window.explorer) window.explorer.openFolder();
+    };
+  }
+
+  const emptyTerminalBtn = document.getElementById('empty-terminal-btn');
+  if (emptyTerminalBtn) {
+    emptyTerminalBtn.onclick = () => {
+      const btn = document.getElementById('toggle-terminal-btn');
+      const panel = document.getElementById('bottom-panel');
+      // Open only — a second click should not hide an already-open terminal.
+      if (btn && panel && panel.style.display === 'none') btn.click();
+      else if (btn && !panel) btn.click();
+    };
+  }
+
+  const emptyAgentBtn = document.getElementById('empty-agent-btn');
+  if (emptyAgentBtn) emptyAgentBtn.onclick = () => toggleAgentPanel(true);
+
   // ---------------------------------------------------------------------------
   // Top Bar Action Buttons
   // ---------------------------------------------------------------------------

@@ -23,6 +23,121 @@ class FileExplorer {
 
     this.bindWorkspaceChanges();
     this.ensureHeaderActions();
+    this.ensureStylesheet();
+    this.ensureTreeKeyboard();
+  }
+
+  /* ====================================================================== */
+  /* Styles + keyboard                                                      */
+  /* ====================================================================== */
+
+  /**
+   * Load the modernized tree stylesheet. index.html is owned elsewhere, so
+   * instead of editing it we append the <link> lazily from this module (the
+   * same pattern as ensureHeaderActions appending the Open Folder button).
+   * It is appended *after* theme-light.css, and the selectors in
+   * explorer.css carry one extra class of specificity, so both win cleanly.
+   */
+  ensureStylesheet() {
+    try {
+      if (document.getElementById('explorer-style')) return;
+      const link = document.createElement('link');
+      link.id = 'explorer-style';
+      link.rel = 'stylesheet';
+      link.href = 'styles/explorer.css';
+      (document.head || document.documentElement).appendChild(link);
+    } catch (e) { /* styles are an enhancement */ }
+  }
+
+  /**
+   * Arrow-key navigation for the tree (VS Code style): Up/Down move the
+   * selection, Right expands a folder (or steps into it), Left collapses it
+   * (or jumps to its parent), Enter opens/toggles. Focus rides on the
+   * container; the active row follows selection, so a re-render keeps the
+   * cursor where the user left it.
+   */
+  ensureTreeKeyboard() {
+    if (!this.container || this._kbdBound) return;
+    this._kbdBound = true;
+    try {
+      if (!this.container.hasAttribute('tabindex')) {
+        this.container.setAttribute('tabindex', '0');
+      }
+    } catch (e) {}
+    this.container.addEventListener('keydown', (e) => this.onTreeKey(e));
+  }
+
+  treeRows() {
+    try {
+      return Array.prototype.slice
+        .call(this.container.querySelectorAll('.tree-node'))
+        .filter((n) => n.offsetParent !== null);
+    } catch (e) { return []; }
+  }
+
+  activateRow(row) {
+    if (!row) return;
+    if (row.dataset.kind === 'dir') {
+      this.selectedDir = row.dataset.path;
+      this.selectedFile = null;
+    } else {
+      this.selectedFile = row.dataset.path;
+      this.selectedDir = this.parentOf(row.dataset.path);
+    }
+    this.markActive(row);
+    try { row.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+  }
+
+  onTreeKey(e) {
+    if (this.ctxMenu) return;
+    const key = e.key;
+    if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'ArrowLeft' &&
+        key !== 'ArrowRight' && key !== 'Enter') return;
+    const rows = this.treeRows();
+    if (!rows.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    let idx = rows.findIndex((n) => n.classList.contains('active'));
+
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
+      if (idx < 0) idx = 0;
+      else idx = key === 'ArrowDown' ? Math.min(rows.length - 1, idx + 1)
+                                     : Math.max(0, idx - 1);
+      this.activateRow(rows[idx]);
+      return;
+    }
+    if (idx < 0) idx = 0;
+    const row = rows[idx];
+    if (!row) return;
+
+    if (key === 'Enter') { row.click(); return; }
+
+    const childWrap = row.nextElementSibling;
+    const isOpen = !!(childWrap && childWrap.classList &&
+                      childWrap.classList.contains('expanded'));
+
+    if (key === 'ArrowRight') {
+      if (row.dataset.kind === 'dir') {
+        if (!isOpen) { row.click(); } // expand
+        else {
+          const first = childWrap.querySelector('.tree-node');
+          if (first && first.offsetParent !== null) this.activateRow(first);
+        }
+      }
+      return;
+    }
+
+    // ArrowLeft
+    if (row.dataset.kind === 'dir' && isOpen) { row.click(); return; } // collapse
+    const list = row.parentNode;
+    if (list && list.parentNode && list.parentNode.classList &&
+        list.parentNode.classList.contains('tree-children')) {
+      const parentRow = list.parentNode.previousElementSibling;
+      if (parentRow && parentRow.classList && parentRow.classList.contains('tree-node')) {
+        this.activateRow(parentRow);
+      }
+    }
   }
 
   /* ====================================================================== */
@@ -292,16 +407,18 @@ class FileExplorer {
       node.classList.add('active');
     }
 
+    // The chevron is always a "▶" glyph; expanded state rotates it via the
+    // .expanded class (CSS transition), which refreshIcon() toggles below.
     const arrow = document.createElement('span');
     arrow.className = 'node-arrow';
-    arrow.textContent = entry.isDirectory ? (isExpanded ? '▼' : '▶') : '▶';
+    arrow.textContent = '▶';
     if (!entry.isDirectory) arrow.style.visibility = 'hidden';
 
     const icon = document.createElement('span');
     icon.className = 'node-icon';
-    icon.innerHTML = window.getFileIcon
-      ? window.getFileIcon(entry.name, !!entry.isDirectory, !!isExpanded)
-      : '';
+    icon.innerHTML = this.iconFor(entry.name, !!entry.isDirectory, !!isExpanded);
+
+    if (entry.isDirectory && isExpanded) node.classList.add('expanded');
 
     const label = document.createElement('span');
     label.className = 'node-label';
@@ -328,7 +445,58 @@ class FileExplorer {
       this.showContextMenu(entry.isDirectory ? 'dir' : 'file', entry, x, y);
     });
 
+    // Clicking a row should give the tree keyboard focus, so arrow keys work
+    // immediately after a mouse interaction.
+    node.addEventListener('mousedown', () => {
+      try { this.container.focus({ preventScroll: true }); } catch (e) {}
+    });
+
     return node;
+  }
+
+  /* ====================================================================== */
+  /* Icons                                                                  */
+  /* ====================================================================== */
+
+  /**
+   * Modern, consistent file/folder glyphs. Semantic `.fi-*` classes carry
+   * the colours (see explorer.css) so both themes stay in tune; stroke/fill
+   * inherit `currentColor`. 16x16 box, rendered at a uniform 16px by CSS.
+   */
+  iconFor(name, isDirectory, isOpen) {
+    const lower = String(name || '').toLowerCase();
+
+    if (isDirectory) {
+      return isOpen
+        ? '<svg class="fi fi-folder-open" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-5A1.5 1.5 0 0 0 14.5 6H8.414l-1.707-1.707A1 1 0 0 0 6 4H1.5z"/></svg>'
+        : '<svg class="fi fi-folder" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 14.5 4H7.414l-1.707-1.707A1 1 0 0 0 5 2H1.5z"/></svg>';
+    }
+
+    if (lower.indexOf('.env') === 0) {
+      return '<svg class="fi fi-env" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a3 3 0 0 0-3 3v2H4a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-1V4a3 3 0 0 0-3-3zm1 8.5v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 2 0zM7 4a1 1 0 0 1 2 0v2H7V4z"/></svg>';
+    }
+    if (lower.indexOf('.git') === 0) {
+      return '<svg class="fi fi-git" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M15.4 7.4L8.6.6a1 1 0 0 0-1.4 0L5.7 2.1l2.1 2.1a1.5 1.5 0 0 1 1.9 1.9l2.1 2.1a1.5 1.5 0 1 1-.7.7L9 6.8v4.4a1.5 1.5 0 1 1-1 0V6.6a1.5 1.5 0 0 1-.8-.8L5.1 7.9a1.5 1.5 0 1 1-.7-.7l2.1-2.1-2.9-2.9-3 3a1 1 0 0 0 0 1.4l6.8 6.8a1 1 0 0 0 1.4 0l6.6-6.6a1 1 0 0 0 0-1.4z"/></svg>';
+    }
+
+    const ext = lower.lastIndexOf('.') > 0 ? lower.slice(lower.lastIndexOf('.') + 1) : '';
+    switch (ext) {
+      case 'json':
+        return '<svg class="fi fi-json" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4.5 2A1.5 1.5 0 0 0 3 3.5V6a1 1 0 0 1-1 1v2a1 1 0 0 1 1 1v2.5A1.5 1.5 0 0 0 4.5 14h1v-1h-1a.5.5 0 0 1-.5-.5V9.667A1.5 1.5 0 0 0 2.5 8 1.5 1.5 0 0 0 4 6.333V3.5a.5.5 0 0 1 .5-.5h1V2h-1zm7 0h-1v1h1a.5.5 0 0 1 .5.5v2.833A1.5 1.5 0 0 0 13.5 8a1.5 1.5 0 0 0-1.5 1.667V12.5a.5.5 0 0 1-.5.5h-1v1h1a1.5 1.5 0 0 0 1.5-1.5V10a1 1 0 0 1 1-1V7a1 1 0 0 1-1-1V3.5A1.5 1.5 0 0 0 11.5 2z"/></svg>';
+      case 'md':
+      case 'markdown':
+        return '<svg class="fi fi-md" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M1 3.5A1.5 1.5 0 0 1 2.5 2h11A1.5 1.5 0 0 1 15 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM3 5v6h1.5V7.5l1.5 2 1.5-2V11H9V5H7.5L6 7.2 4.5 5H3zm8 0v3.5h-1.5L11.5 11l2-2.5H12V5h-1z"/></svg>';
+      case 'js':
+      case 'mjs':
+      case 'cjs':
+      case 'jsx':
+        return '<svg class="fi fi-js" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="2"/><path fill="#000" d="M5.5 12c-.9 0-1.4-.4-1.7-.9l.9-.6c.2.4.4.6.8.6.4 0 .7-.2.7-.6V6.5h1.2V10.5c0 1-.7 1.5-1.9 1.5zm5.3-.1c-.9 0-1.6-.5-1.9-1.2l.9-.5c.2.4.5.7 1 .7.4 0 .8-.2.8-.5 0-.4-.3-.5-.9-.7l-.5-.2c-.9-.4-1.3-.8-1.3-1.6 0-.9.7-1.5 1.8-1.5.8 0 1.4.3 1.7.8l-.8.5c-.2-.3-.5-.4-.9-.4-.4 0-.7.2-.7.5 0 .3.2.4.8.6l.4.2c1 .4 1.4.9 1.4 1.7 0 1-.8 1.4-1.9 1.4z"/></svg>';
+      case 'ts':
+      case 'tsx':
+        return '<svg class="fi fi-ts" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="2"/><path fill="#fff" d="M4.2 6.5h3.6v1H6.5v4.5h-1V7.5H4.2v-1zm6.7 5.4c-.9 0-1.6-.5-1.9-1.2l.9-.5c.2.4.5.7 1 .7.4 0 .8-.2.8-.5 0-.4-.3-.5-.9-.7l-.5-.2c-.9-.4-1.3-.8-1.3-1.6 0-.9.7-1.5 1.8-1.5.8 0 1.4.3 1.7.8l-.8.5c-.2-.3-.5-.4-.9-.4-.4 0-.7.2-.7.5 0 .3.2.4.8.6l.4.2c1 .4 1.4.9 1.4 1.7 0 1-.8 1.4-1.9 1.4z"/></svg>';
+      default:
+        return '<svg class="fi fi-file" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4 1h5.5L13 4.5V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm5 1v3h3L9 2z"/></svg>';
+    }
   }
 
   async buildTree(dirPath) {
@@ -363,13 +531,14 @@ class FileExplorer {
 
           const childContainer = document.createElement('div');
           childContainer.className = `tree-children ${isExpanded ? 'expanded' : ''}`;
-          childContainer.style.paddingLeft = '14px';
 
           const refreshIcon = () => {
             const expanded = this.expandedDirs.has(entry.path);
-            node.querySelector('.node-arrow').textContent = expanded ? '▼' : '▶';
-            node.querySelector('.node-icon').innerHTML = window.getFileIcon
-              ? window.getFileIcon(entry.name, true, expanded) : '';
+            const arrowEl = node.querySelector('.node-arrow');
+            if (arrowEl) arrowEl.textContent = '▶'; // rotation comes from .expanded
+            node.classList.toggle('expanded', expanded);
+            node.querySelector('.node-icon').innerHTML =
+              this.iconFor(entry.name, true, expanded);
           };
 
           node.onclick = async (e) => {

@@ -1147,9 +1147,9 @@ class AIAssistant {
     welcome.className = 'chat-msg assistant msg-welcome';
     welcome._aiSourceText = '';
     welcome.innerHTML = this.headerHtml('assistant', { label: 'Cloud Code AI Assistant' })
-      + '<div class="msg-body msg-muted">'
-      + '<p>Hi! I am your local AI coding companion powered by your private GPU tunnel.</p>'
-      + '<p>Type <code class="msg-inline-code">@</code> to attach files, switch to <b>Agent</b> mode to let me edit files and run commands, or use a quick action below.</p>'
+      + '<div class="msg-body msg-muted welcome-intro">'
+      + '<p class="welcome-lede">Hi! I am your local AI coding companion, powered by your private GPU tunnel.</p>'
+      + '<p class="welcome-sub">Type <code class="msg-inline-code">@</code> to attach files, switch to <b>Agent</b> mode to let me edit files and run commands, or use a quick action below.</p>'
       + '</div>'
       + this.emptyStateHtml();
     this.messagesContainer.appendChild(welcome);
@@ -1194,10 +1194,17 @@ class AIAssistant {
     el.className = 'chat-msg user msg-user';
     el._aiSourceText = text || '';
 
-    let contextHtml = '';
-    if (contextPreview) {
-      contextHtml = '<div class="msg-context">' + this.escapeHtml(contextPreview) + '</div>';
-    }
+    // Duplicate guard: some callers forward the user's own prompt as the
+    // "context" preview (e.g. an agent run with no attachments). Rendering
+    // both would show the same sentence twice — once inside the quoted
+    // context chip and once as the message body. The chip is only rendered
+    // when the preview is non-empty AND differs from the body text
+    // (trimmed, case-insensitive).
+    const ctx = contextPreview == null ? '' : String(contextPreview).trim();
+    const bodyText = text == null ? '' : String(text).trim();
+    const contextHtml = (ctx && ctx.toLowerCase() !== bodyText.toLowerCase())
+      ? '<div class="msg-context">' + this.escapeHtml(ctx) + '</div>'
+      : '';
 
     el.innerHTML = this.headerHtml('user')
       + '<div class="msg-body">'
@@ -1720,7 +1727,14 @@ class AgentThinkingPanel {
     const step = this.el.querySelector('.think-step');
     const head = this.el.querySelector('.think-head');
     if (title) title.textContent = this.finished ? 'Thought' : 'Thinking';
-    if (step) step.textContent = this.step > 0 ? ('step ' + this.step) : '';
+    if (step) {
+      // Collapsed one-liner reads "Thought · 4 steps"; while live it is the
+      // running counter ("step 4").
+      const n = this.step || this.lines.length;
+      step.textContent = this.finished
+        ? (n > 0 ? (n === 1 ? '1 step' : n + ' steps') : '')
+        : (this.step > 0 ? ('step ' + this.step) : '');
+    }
     if (head) {
       head.setAttribute('aria-expanded', this.open ? 'true' : 'false');
       head.title = this.finished

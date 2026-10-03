@@ -1,4 +1,18 @@
 // Monaco Editor & Tabs Manager (source files + diff review tabs)
+
+// Load the editor-chrome stylesheet (tab bar, empty state). Inserted BEFORE
+// theme-light.css so the light-theme overrides keep winning the cascade.
+// Guarded so a <link> added to index.html later will not double-load it.
+(function ensureEditorStyles() {
+  if (document.querySelector('link[href*="editor.css"]')) return;
+  const link = document.createElement('link');
+  link.id = 'editor-css-link';
+  link.rel = 'stylesheet';
+  link.href = 'styles/editor.css';
+  const light = document.querySelector('link[href*="theme-light.css"]');
+  document.head.insertBefore(link, light || null);
+})();
+
 const IMAGE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif'
 ]);
@@ -35,7 +49,67 @@ class EditorManager {
     this._readyCallbacks = [];
     this._activeFileCallbacks = [];
 
+    this._buildEmptyState();
     this.initMonaco();
+  }
+
+  // -------------------------------------------------------------------------
+  // Empty state (no file open) — wordmark, tagline and quick actions.
+  // Rebuilds the #empty-state markup; KEEPS the ids that app.js wires and
+  // that _showEmpty() toggles: #empty-open-folder-btn, #empty-workspace-open,
+  // #empty-no-workspace and the .empty-subtitle inside the workspace block.
+  // -------------------------------------------------------------------------
+  _buildEmptyState() {
+    if (!this.emptyState) return;
+    this.emptyState.innerHTML = `
+      <div class="empty-hero">
+        <div class="empty-logo" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="38" height="38" fill="#ffffff">
+            <path d="M14.5 3.5l-3-2a.5.5 0 0 0-.5 0L1.5 7.5a.5.5 0 0 0 0 .9l9.5 6a.5.5 0 0 0 .5 0l3-2a.5.5 0 0 0 .2-.4v-8.5a.5.5 0 0 0-.2-.5zM11 11.2L4.3 8 11 4.8v6.4z"/>
+          </svg>
+        </div>
+        <div class="empty-wordmark">Cloud Code</div>
+        <div class="empty-tagline">The AI-native editor — open a folder and let the agent build with you.</div>
+      </div>
+
+      <!-- A folder IS open, you just closed the last tab -->
+      <div class="empty-body" id="empty-workspace-open" hidden>
+        <div class="empty-subtitle"></div>
+        <div class="empty-hint">Pick a file in the Explorer, or ask the agent to create one.</div>
+      </div>
+      <!-- No folder open at all -->
+      <div class="empty-body" id="empty-no-workspace">
+        <div class="empty-subtitle">No folder open — choose a folder to start working.</div>
+      </div>
+
+      <div class="empty-actions">
+        <button class="empty-action primary empty-open-btn" id="empty-open-folder-btn" type="button">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor"><path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 14.5 4H7.414l-1.707-1.707A1 1 0 0 0 5 2H1.5z"/></svg>
+          <span class="ea-label">Open Folder</span>
+          <kbd>Ctrl+O</kbd>
+        </button>
+        <button class="empty-action" id="empty-new-file-btn" type="button">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor"><path d="M9 1H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6L9 1zm4 12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h4.5L13 6.5V13z"/><path d="M8 7v2H6v1h2v2h1v-2h2V9H9V7H8z"/></svg>
+          <span class="ea-label">New File</span>
+        </button>
+        <button class="empty-action" id="empty-terminal-btn" type="button">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor"><path d="M2.7 3.3 7 7l-4.3 3.7 1 1L8.7 7 3.7 2.3l-1 1zM9 12h5v1.3H9V12z"/></svg>
+          <span class="ea-label">Open Terminal</span>
+          <kbd>Ctrl+\`</kbd>
+        </button>
+        <button class="empty-action" id="empty-agent-btn" type="button">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="13" r="1.5"/><circle cx="15" cy="13" r="1.5"/></svg>
+          <span class="ea-label">Switch to Agent</span>
+          <kbd>Ctrl+Shift+A</kbd>
+        </button>
+      </div>
+
+      <div class="shortcuts">
+        <div><kbd>Ctrl+P</kbd> Quick Open File</div>
+        <div><kbd>Ctrl+Shift+P</kbd> Command Palette</div>
+        <div><kbd>Ctrl+K</kbd> Inline AI Edit</div>
+        <div><kbd>Ctrl+S</kbd> Save File</div>
+      </div>`;
   }
 
   // -------------------------------------------------------------------------
@@ -817,6 +891,15 @@ class EditorManager {
   renderTabs() {
     this.tabsBar.innerHTML = '';
     const activeKey = this.activeKey;
+    let activeTabEl = null;
+
+    // Close control: an × that swaps for a dirty dot while the buffer has
+    // unsaved changes (the × returns on hover so the tab stays closable).
+    const closeMarkup =
+      '<span class="tab-close" title="Close (Ctrl+W)">' +
+        '<span class="tab-close-x">&times;</span>' +
+        '<span class="tab-dirty-dot" aria-hidden="true"></span>' +
+      '</span>';
 
     for (const key of this.tabOrder) {
       if (key.startsWith('file:')) {
@@ -831,12 +914,13 @@ class EditorManager {
         tabEl.innerHTML = `
           <span class="tab-icon">${iconSvg}</span>
           <span class="tab-title" title="${this._escAttr(path)}">${this._escAttr(tab.title)}</span>
-          <span class="tab-close" title="Close (Ctrl+W)">&times;</span>
+          ${closeMarkup}
         `;
 
         tabEl.onclick = () => this._activateFile(path);
         tabEl.querySelector('.tab-close').onclick = (e) => this.closeByKey(key, e);
         this.tabsBar.appendChild(tabEl);
+        if (key === activeKey) activeTabEl = tabEl;
       } else if (key.startsWith('diff:')) {
         const id = key.slice(5);
         const tab = this.diffTabs.get(id);
@@ -847,12 +931,18 @@ class EditorManager {
         tabEl.innerHTML = `
           <span class="tab-icon diff-glyph">◈</span>
           <span class="tab-title" title="${this._escAttr(tab.title)}">${this._escAttr(tab.title)}</span>
-          <span class="tab-close" title="Close">&times;</span>
+          ${closeMarkup}
         `;
         tabEl.onclick = () => this.activateDiff(id);
         tabEl.querySelector('.tab-close').onclick = (e) => this.closeByKey(key, e);
         this.tabsBar.appendChild(tabEl);
+        if (key === activeKey) activeTabEl = tabEl;
       }
+    }
+
+    // Keep the active tab visible in the horizontally scrolling strip.
+    if (activeTabEl && typeof activeTabEl.scrollIntoView === 'function') {
+      try { activeTabEl.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
     }
   }
 

@@ -294,7 +294,7 @@ group('adapters — loop retry / backoff');
     eq(retries.length, 1, 'one retry event after a transient failure');
     eq(retries[0].retryable, true, 'retry event marked retryable');
     eq(retries[0].kind, 'transport', 'retry event carries the kind');
-    eq(r.stopReason, 'done', 'loop recovered');
+    eq(r.stopReason, 'completed', 'loop recovered');
     eq(r.finalText, 'Recovered.', 'answer after retry');
     eq(r.retries, 1, 'result reports one retry');
     ok(r.lastError === null, 'no lastError on a successful run');
@@ -357,7 +357,7 @@ group('adapters — loop retry / backoff');
     });
     const r = await l.run({ messages: [] });
     eq(calls, 2, 'res.error 503 retried once');
-    eq(r.stopReason, 'done', 'recovered after res.error retry');
+    eq(r.stopReason, 'completed', 'recovered after res.error retry');
   }
 
   // --- cancellation is not retried ---------------------------------------
@@ -427,7 +427,7 @@ group('adapters — loop retry / backoff');
       executeTool: async () => 'contents'
     });
     const r = await l.run({ messages: [] });
-    eq(r.stopReason, 'done', 'default: silent turn after tools still ends as done');
+    eq(r.stopReason, 'completed', 'default: silent turn after tools still ends as completed');
     eq(r.nudges, 0, 'no nudges by default');
     eq(r.finalText, 'All done.', 'final text kept');
   }
@@ -473,7 +473,7 @@ group('adapters — loop retry / backoff');
     });
     const r = await l.run({ messages: [{ role: 'user', content: 'go' }] });
     eq(r.nudges, 1, 'one nudge when the model recovers by calling a tool');
-    eq(r.stopReason, 'done', 'recovers and finishes');
+    eq(r.stopReason, 'completed', 'recovers and finishes');
     eq(r.finalText, 'never reached', 'recovered final text');
     eq(calls, 3, 'three model calls: prose, tool, answer');
   }

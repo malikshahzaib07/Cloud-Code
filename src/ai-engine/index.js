@@ -8,6 +8,7 @@
 //   <script src="core/model-adapters.js"></script>
 //   <script src="core/tools.js"></script>
 //   <script src="core/prompt.js"></script>
+//   <script src="core/context.js"></script>
 //   <script src="core/loop.js"></script>
 //   <script src="index.js"></script>
 //
@@ -27,8 +28,9 @@
   const tools = pick('tools');
   const prompt = pick('prompt');
   const loop = pick('loop');
+  const context = pick('context');
 
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
 
   /**
    * createEngine(options)
@@ -51,6 +53,7 @@
       adapters,
       tools,
       prompt,
+      context,
       AgentLoop: loop.AgentLoop,
 
       /** The adapter for a model id (or null when unknown). */
@@ -85,6 +88,7 @@
     adapters,
     tools,
     prompt,
+    context,
     AgentLoop: loop.AgentLoop,
     createEngine
   };

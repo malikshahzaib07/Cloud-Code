@@ -83,3 +83,5 @@ suite();
 require('./engine.test.js');
 suite();
 require('./adapters.test.js');
+suite();
+require('./context.test.js');

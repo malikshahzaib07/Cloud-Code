@@ -1,0 +1,160 @@
+/* ==========================================================================
+   Explorer tree — modernized (VS Code parity)
+   Loaded by explorer.js AFTER vscode.css/theme-light.css (via an injected
+   <link>), and every rule carries one extra class of specificity, so these
+   win in both the dark (default) and light (html[data-theme="light"])
+   themes. Colours come from the shared variables with safe fallbacks.
+   ========================================================================== */
+
+/* --- Container / focus ---------------------------------------------------- */
+.tree-container {
+  outline: none;
+}
+
+.tree-container:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent-color, #007acc);
+}
+
+/* --- Rows ----------------------------------------------------------------- */
+.tree-container .tree-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  margin: 1px 4px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-primary, #cccccc);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: background-color 0.1s ease;
+}
+
+.tree-container .tree-node:hover {
+  background-color: var(--list-hover, rgba(255, 255, 255, 0.08));
+}
+
+.tree-container .tree-node.active {
+  background-color: var(--list-active, #094771);
+  color: var(--list-active-foreground, #ffffff);
+}
+
+html[data-theme="light"] .tree-container .tree-node {
+  color: var(--text-primary, #1f1f1f);
+}
+
+html[data-theme="light"] .tree-container .tree-node:hover {
+  background-color: var(--list-hover, #e8e8e8);
+}
+
+html[data-theme="light"] .tree-container .tree-node.active {
+  background-color: var(--list-active, #cfe6ff);
+  color: #1f1f1f;
+}
+
+/* --- Expand/collapse chevron ---------------------------------------------- */
+/* One "▶" glyph for every state; the .expanded class on the row rotates it
+   90°. transform-only, 120 ms — well inside the 150 ms budget. */
+.tree-container .tree-node .node-arrow {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-secondary, #969696);
+  transform: rotate(0deg);
+  transition: transform 0.12s ease;
+}
+
+.tree-container .tree-node.expanded > .node-arrow {
+  transform: rotate(90deg);
+}
+
+html[data-theme="light"] .tree-container .tree-node .node-arrow {
+  color: #6b6b6b;
+}
+
+html[data-theme="light"] .tree-container .tree-node.active .node-arrow {
+  color: #3f3f3f;
+}
+
+/* --- Icons ----------------------------------------------------------------- */
+/* Every glyph sits in the same 16x16 box and is centred, so json / git / env
+   / md / ts / js / generic line up vertically with the folder icons. */
+.tree-container .tree-node .node-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tree-container .tree-node .node-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+/* Muted, modern palette (no more neon-yellow blobs); paths use currentColor. */
+.fi-folder      { color: #8fa3b3; }
+.fi-folder-open { color: #b7c6d4; }
+.fi-file        { color: var(--text-secondary, #969696); }
+.fi-json        { color: #d8b84e; }
+.fi-git         { color: #e06c60; }
+.fi-env         { color: #d8c255; }
+.fi-md          { color: #5aa9e6; }
+.fi-js rect     { fill: #f7df1e; }
+.fi-ts rect     { fill: #3178c6; }
+
+/* --- Label ----------------------------------------------------------------- */
+.tree-container .tree-node .node-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Children + indent guides ---------------------------------------------- */
+/* Each nesting level adds 18px (10 margin + 8 padding); the 1px border is
+   the guide line. It brightens slightly while the level is hovered, giving
+   a clear sense of hierarchy in both themes. */
+.tree-container .tree-children {
+  display: none;
+}
+
+.tree-container .tree-children.expanded {
+  display: block;
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle, #2b2b2b);
+  transition: border-color 0.1s ease;
+}
+
+.tree-container .tree-children.expanded:hover {
+  border-left-color: var(--border-color, #3e3e42);
+}
+
+html[data-theme="light"] .tree-container .tree-children.expanded {
+  border-left-color: #e0e0e0;
+}
+
+html[data-theme="light"] .tree-container .tree-children.expanded:hover {
+  border-left-color: #c8c8c8;
+}
+
+/* --- Reduced motion -------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .tree-container .tree-node,
+  .tree-container .tree-node .node-arrow,
+  .tree-container .tree-children.expanded {
+    transition: none !important;
+  }
+}

@@ -1,0 +1,341 @@
+/* ============================================================================
+   editor.css — Editor chrome: tab bar, empty state
+   ----------------------------------------------------------------------------
+   Injected by js/editor.js BEFORE theme-light.css, so the light theme's
+   html[data-theme="light"] overrides keep winning the cascade.
+   All colors come from the shared custom properties (vscode.css defines the
+   dark defaults; theme-light.css redefines them for light), so both themes
+   work from this single file.
+   ========================================================================== */
+
+/* ============================================================================
+   1. Tabs bar — real IDE tabs: icon, title, dirty dot, close, active accent
+   ========================================================================== */
+
+#tabs-bar {
+  height: 35px;
+  background-color: var(--bg-tabs);
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border-subtle);
+  scrollbar-width: thin;
+}
+
+/* With no open files the strip collapses instead of showing an empty bar. */
+#tabs-bar:empty {
+  display: none;
+}
+
+#tabs-bar::-webkit-scrollbar {
+  height: 3px;
+}
+
+.tab {
+  flex: 0 0 auto;
+  height: 35px;
+  min-width: 120px;
+  max-width: 220px;
+  padding: 0 8px 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background-color: var(--bg-tab-inactive);
+  color: var(--text-secondary);
+  border-right: 1px solid var(--border-subtle);
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1;
+  position: relative;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.tab:hover {
+  background-color: var(--bg-tabs);
+  color: var(--text-primary);
+}
+
+.tab.active {
+  background-color: var(--bg-tab-active);
+  color: var(--text-active);
+}
+
+/* Accent line along the top of the active tab (overlay — no layout shift,
+   unlike the old border-top which stole a pixel from the tab content). */
+.tab.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: var(--accent-color);
+}
+
+.tab .tab-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab .tab-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.tab .tab-icon.diff-glyph {
+  width: auto;
+  font-size: 12px;
+  color: var(--cc-warning, #b07d12);
+}
+
+.tab .tab-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Close control — × by default; a dirty tab swaps the × for a dot, and the
+   × returns on hover so the tab stays closable. */
+.tab .tab-close {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.tab .tab-close:hover {
+  background-color: var(--cc-hover-overlay, rgba(255, 255, 255, 0.15));
+  color: var(--text-active);
+}
+
+.tab .tab-dirty-dot {
+  display: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--text-active);
+}
+
+.tab.dirty .tab-close-x {
+  display: none;
+}
+
+.tab.dirty .tab-dirty-dot {
+  display: block;
+}
+
+.tab.dirty:hover .tab-close-x {
+  display: block;
+}
+
+.tab.dirty:hover .tab-dirty-dot {
+  display: none;
+}
+
+/* ============================================================================
+   2. Empty state — wordmark, tagline, quick-action grid, shortcut hints
+   ========================================================================== */
+
+#empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 18px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  background:
+    radial-gradient(640px 320px at 50% 28%, rgba(0, 122, 204, 0.07), transparent 70%);
+}
+
+/* EditorManager toggles the two context blocks with the `hidden` property;
+   display:flex above would otherwise override the UA's [hidden] rule. */
+#empty-state .empty-body[hidden] {
+  display: none !important;
+}
+
+/* ---------- hero ---------- */
+.empty-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.empty-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--accent-color), var(--accent-hover));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.empty-wordmark {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--text-active);
+}
+
+.empty-tagline {
+  max-width: 420px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ---------- context blocks (folder open vs. no folder) ---------- */
+.empty-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.empty-subtitle {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.empty-hint {
+  font-size: 12px;
+  color: var(--text-muted, var(--text-secondary));
+}
+
+/* ---------- quick-action grid ---------- */
+.empty-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 230px));
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.empty-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background-color: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.empty-action:hover {
+  background-color: var(--list-hover);
+  border-color: var(--accent-color);
+  transform: translateY(-1px);
+}
+
+.empty-action:active {
+  transform: translateY(0);
+}
+
+.empty-action svg {
+  flex: 0 0 auto;
+  color: var(--accent-color);
+}
+
+.empty-action .ea-label {
+  flex: 1 1 auto;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Primary action (Open Folder). Also carries the legacy .empty-open-btn
+   class, whose theme-light.css overrides resolve to the same accent fill. */
+.empty-action.primary {
+  background-color: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #ffffff;
+}
+
+.empty-action.primary svg {
+  color: #ffffff;
+}
+
+.empty-action.primary:hover {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.empty-action.primary kbd {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+}
+
+/* ---------- keyboard hints ---------- */
+#empty-state .shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 18px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-muted, var(--text-secondary));
+}
+
+#empty-state .shortcuts > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+#empty-state kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  padding: 1px 5px;
+  background: var(--badge-bg);
+  border: 1px solid var(--border-color);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: text;
+}
+
+/* Narrow windows: collapse the action grid to a single column. */
+@media (max-width: 560px) {
+  .empty-actions {
+    grid-template-columns: minmax(180px, 260px);
+  }
+}
+
+/* ============================================================================
+   3. Reduced motion — all transitions above are ≤ 150 ms, opacity/transform/
+      background only; disable them entirely when the OS asks for it.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .tab,
+  .tab .tab-close,
+  .empty-action {
+    transition: none !important;
+  }
+}

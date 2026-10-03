@@ -90,6 +90,8 @@ body, html {
 #titlebar .window-title {
   color: var(--text-secondary);
   font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -100,7 +102,22 @@ body, html {
   -webkit-app-region: no-drag;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 3px;
+}
+
+/* Right-side titlebar icons: consistent hit-targets with rounded hover */
+#titlebar .quick-actions .icon-btn {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+#titlebar .quick-actions .icon-btn:hover {
+  background-color: var(--cc-hover-overlay, rgba(255, 255, 255, 0.10));
+  color: var(--text-active);
 }
 
 /* Main Layout */
@@ -118,39 +135,53 @@ body, html {
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 2px;
+  padding: 5px 0;
   border-right: 1px solid var(--border-subtle);
   z-index: 10;
 }
 
 .activity-icon {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: #858585;
+  color: var(--text-secondary);
   position: relative;
-  transition: color 0.15s ease;
+  border-radius: 8px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+/* Consistent glyph sizing regardless of the inline width/height in markup */
+.activity-icon svg {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
 }
 
 .activity-icon:hover {
-  color: #ffffff;
+  color: var(--text-active);
+  background-color: var(--cc-hover-overlay, rgba(255, 255, 255, 0.08));
 }
 
 .activity-icon.active {
-  color: #ffffff;
-  background-color: var(--bg-activity-active);
+  color: var(--text-active);
+  background-color: var(--cc-hover-overlay, rgba(255, 255, 255, 0.08));
 }
 
+/* Accent tick on the leading edge of the active view's icon */
 .activity-icon.active::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background-color: #ffffff;
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 22px;
+  border-radius: 0 3px 3px 0;
+  background-color: var(--accent-color);
 }
 
 .activity-spacer {
@@ -260,37 +291,51 @@ body, html {
   flex: 1 1 auto;
 }
 
-/* Top navigation bar (Explorer / Search / Terminal / Agent) */
-.nav-bar {
+/* Top navigation bar — segmented control (Explorer / Search / Terminal / Agent / Theme).
+   Scoped to #nav-bar so the active-state pill reads correctly in BOTH themes
+   (the legacy single-class overrides in theme-light.css predate this style). */
+#nav-bar {
   display: flex;
   align-items: center;
   gap: 2px;
   margin-left: 16px;
   flex-shrink: 0;
+  padding: 3px;
+  background: rgba(127, 127, 127, 0.12);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
 }
 
-.nav-btn {
+#nav-bar .nav-btn {
   display: flex;
   align-items: center;
   gap: 6px;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text-secondary);
   cursor: pointer;
   font-size: 12px;
-  padding: 4px 10px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 5px 11px;
   white-space: nowrap;
+  transition: background-color 0.12s ease, color 0.12s ease;
 }
 
-.nav-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+#nav-bar .nav-btn svg {
+  flex-shrink: 0;
 }
 
-.nav-btn.active {
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffffff;
+#nav-bar .nav-btn:hover {
+  background: var(--cc-hover-overlay, rgba(255, 255, 255, 0.10));
+  color: var(--text-active);
+}
+
+#nav-bar .nav-btn.active {
+  background: var(--bg-input, var(--bg-tab-active));
+  color: var(--text-active);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
 }
 
 /* Collapsible sidebar (top-nav Explorer toggle) */
@@ -471,37 +516,8 @@ body, html {
   padding: 24px;
 }
 
-/* ============================================================================
-   Empty state (no folder open)
-   ========================================================================== */
-.empty-subtitle {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #6e6e6e;
-}
-
-.empty-open-btn {
-  margin-top: 14px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 14px;
-  font-size: 12px;
-  color: #ffffff;
-  background-color: #007acc;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.empty-open-btn:hover {
-  background-color: #1a9bf0;
-}
-
-.empty-open-btn kbd {
-  background: rgba(255, 255, 255, 0.18);
-  color: #ffffff;
-}
+/* Empty state (no file / no folder) and the editor tab bar live in
+   styles/editor.css — loaded before theme-light.css so light overrides win. */
 
 .sidebar-header {
   height: 35px;
@@ -610,119 +626,13 @@ body, html {
   position: relative;
 }
 
-/* Tabs Bar */
-#tabs-bar {
-  height: 35px;
-  background-color: var(--bg-tabs);
-  display: flex;
-  align-items: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.tab {
-  height: 35px;
-  padding: 0 12px;
-  background-color: var(--bg-tab-inactive);
-  color: var(--text-secondary);
-  border-right: 1px solid var(--border-subtle);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  font-size: 12px;
-  max-width: 200px;
-  min-width: 110px;
-  position: relative;
-  transition: background-color 0.1s ease;
-}
-
-.tab:hover {
-  background-color: #272728;
-  color: var(--text-primary);
-}
-
-.tab.active {
-  background-color: var(--bg-tab-active);
-  color: var(--text-active);
-  border-top: 1px solid var(--accent-color);
-}
-
-.tab .tab-icon {
-  display: flex;
-  align-items: center;
-}
-
-.tab .tab-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tab .tab-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 3px;
-  color: var(--text-secondary);
-}
-
-.tab .tab-close:hover {
-  background-color: rgba(255, 255, 255, 0.15);
-  color: #fff;
-}
-
-.tab.dirty .tab-close::after {
-  content: '●';
-  font-size: 10px;
-  color: #fff;
-}
+/* Tabs bar + empty state styles moved to styles/editor.css */
 
 /* Monaco Container */
 #monaco-host {
   flex: 1;
   width: 100%;
   position: relative;
-}
-
-#empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: #555555;
-  gap: 12px;
-}
-
-#empty-state .shortcuts {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-}
-
-#empty-state .shortcuts > div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-}
-
-#empty-state kbd {
-  background: #2a2a2a;
-  border: 1px solid #444;
-  padding: 2px 6px;
-  border-radius: 3px;
-  color: #aaa;
-  white-space: nowrap;
-  flex-shrink: 0;
-  user-select: text;
 }
 
 /* Bottom Panel / Terminal */
@@ -982,31 +892,54 @@ body, html {
 
 /* Status Bar */
 #statusbar {
-  height: 22px;
+  height: 24px;
   background-color: var(--bg-statusbar);
   color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 10px;
-  font-size: 11px;
+  gap: 12px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  letter-spacing: 0.1px;
 }
 
 .statusbar-section {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 2px;
+  min-width: 0;
 }
 
+/* Constant padding — the hover state only changes the background, so items
+   no longer shift sideways on mouse-over. */
 .statusbar-item {
   display: flex;
   align-items: center;
   gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 4px;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background-color 0.12s ease;
 }
 
 .statusbar-item:hover {
-  background-color: rgba(255, 255, 255, 0.2);
-  padding: 0 4px;
-  border-radius: 2px;
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+/* ============================================================================
+   Reduced motion — chrome transitions are decorative; honor the OS setting.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .activity-icon,
+  #nav-bar .nav-btn,
+  #titlebar .quick-actions .icon-btn,
+  .statusbar-item,
+  .tab,
+  .tab .tab-close,
+  .empty-action {
+    transition: none !important;
+  }
 }

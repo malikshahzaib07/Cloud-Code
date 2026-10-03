@@ -33,6 +33,28 @@
     'retry', 'health'
   ];
 
+  /** Lazy tools lookup so load order does not matter in the browser. */
+  function tools() {
+    if (global.CloudAI && global.CloudAI.tools) return global.CloudAI.tools;
+    if (typeof require === 'function') {
+      const t = require('./tools.js');
+      global.CloudAI = Object.assign(global.CloudAI || {}, { tools: t });
+      return t;
+    }
+    throw new Error('Cloud AI engine: core/tools.js must be loaded before core/loop.js');
+  }
+
+  /** Lazy context lookup so load order does not matter in the browser. */
+  function context() {
+    if (global.CloudAI && global.CloudAI.context) return global.CloudAI.context;
+    if (typeof require === 'function') {
+      const c = require('./context.js');
+      global.CloudAI = Object.assign(global.CloudAI || {}, { context: c });
+      return c;
+    }
+    throw new Error('Cloud AI engine: core/context.js must be loaded before core/loop.js');
+  }
+
   /** Retry budget and backoff schedule for transient transport failures. */
   const RETRY_DELAYS_MS = [400, 1200];
 
@@ -92,6 +114,8 @@
         : !!host.nudgeOnSilentTurns;
       this.requireToolFirstStep = !!opts.requireToolFirstStep;
       this.retryDelaysMs = Array.isArray(opts.retryDelaysMs) ? opts.retryDelaysMs.slice() : RETRY_DELAYS_MS.slice();
+      // Context budget: { budget, keepRecent, maxChars } — see core/context.js.
+      this.contextOptions = opts.context && typeof opts.context === 'object' ? Object.assign({}, opts.context) : {};
       this.messages = [];
       this.step = 0;
       this.running = false;
@@ -150,6 +174,9 @@
       let useNativeTools = true;
       let nudges = 0;
       let retriesUsed = 0;
+      let trimmedTotal = 0;
+      const contextOpts = Object.assign({}, this.contextOptions,
+        opts.context && typeof opts.context === 'object' ? opts.context : {});
       this.lastError = null;
       this._toolsAlreadyUsed = false;
 
@@ -166,6 +193,24 @@
 
           this.step += 1;
           this._emit({ type: 'step', step: this.step, maxSteps: this.maxSteps });
+
+          // --- context budget ---------------------------------------------
+          // Trim old tool results BEFORE asking for the next completion so
+          // the estimate we send never exceeds the budget.
+          const trimmed = context().trimMessages(this.messages, contextOpts);
+          if (trimmed.trimmed > 0) {
+            trimmedTotal += trimmed.trimmed;
+            this.messages = trimmed.messages;
+            this._emit({
+              type: 'notice',
+              text: 'Context budget reached — trimmed ' + trimmed.trimmed +
+                ' older tool result(s) to their first ~' +
+                (contextOpts.maxChars || context().DEFAULT_MAX_CHARS) + ' characters.',
+              step: this.step,
+              trimmed: trimmed.trimmed,
+              estimatedTokens: trimmed.estimatedTokens
+            });
+          }
 
           let res;
           // --- transient-failure retry with backoff --------------------------
@@ -300,7 +345,7 @@
             finalText = clean;
             this.messages.push({ role: 'assistant', content: clean || '(no response)' });
             this._emit({ type: 'assistant', content: clean || '(no response)', reasoning, step: this.step });
-            stopReason = 'done';
+            stopReason = 'completed';
             break;
           }
 
@@ -321,6 +366,8 @@
               text = await this.executeTool(tc);
               if (text == null) text = '';
               text = String(text);
+              // Never let a huge tool output blow the context budget.
+              text = tools().truncateResult(tc.name, text);
               this._emit({ type: 'tool_end', toolCall: tc, text, step: this.step });
             } catch (err) {
               // Tool failures are returned to the model, never thrown out of the loop.
@@ -339,7 +386,7 @@
         this._emit({ type: 'notice', text: 'Agent stopped.', step: this.step, cancelled: true });
       }
       const result = {
-        ok: stopReason === 'done',
+        ok: stopReason === 'completed',
         steps: this.step,
         stopReason,
         cancelled: stopReason === 'cancelled',
@@ -348,7 +395,8 @@
         error,
         lastError: this.lastError,
         nudges,
-        retries: retriesUsed
+        retries: retriesUsed,
+        trimmed: trimmedTotal
       };
       this._emit({ type: 'done', result });
       return result;
